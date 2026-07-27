@@ -15,12 +15,12 @@ set(CMAKE_PROJECT_NAME VBDrive)
 
 # VBBoot is built as a separate firmware image and then merged with VBDrive.
 # These cache options are passed through to the bootloader sub-build below.
-set(BOOTLOADER_FDCAN_ID_FORMAT "extended" CACHE STRING "VBBoot FDCAN ID format: standard or extended")
+set(BOOTLOADER_FDCAN_ID_FORMAT "standard" CACHE STRING "VBBoot FDCAN ID format: standard or extended")
 set_property(CACHE BOOTLOADER_FDCAN_ID_FORMAT PROPERTY STRINGS standard extended)
 if(NOT BOOTLOADER_FDCAN_ID_FORMAT MATCHES "^(standard|extended)$")
     message(FATAL_ERROR "BOOTLOADER_FDCAN_ID_FORMAT must be 'standard' or 'extended'")
 endif()
-option(BOOTLOADER_USE_EEPROM_CONFIG "Load VBBoot CAN node id and rates from VBDrive EEPROM config" ON)
+option(BOOTLOADER_USE_EEPROM_CONFIG "Load VBBoot CAN node id and rates from VBDrive EEPROM config" OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
@@ -159,7 +159,7 @@ add_custom_command(
         -DBOOT_START=0x08000000
         -DBOOT_END=0x08003000
         -DAPP_START=0x08003000
-        -DAPP_END=0x08020000
+        -DAPP_END=0x0801F800
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/merge_vbdrive_hex.cmake
     DEPENDS
         ${CMAKE_PROJECT_NAME}
