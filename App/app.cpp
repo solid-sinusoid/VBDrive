@@ -1,6 +1,8 @@
 //#pragma region Includes
 #include "app.h"
 
+#include <array>
+#include <cstring>
 #include <memory>
 #include <cmath>
 #include <type_traits>
@@ -124,6 +126,97 @@ EEPROM eeprom(&hi2c2, 64, I2C_MEMADD_SIZE_16BIT);
 EEPROM& get_eeprom() {
     return eeprom;
 }
+
+namespace {
+
+using LegacyConfigBytes = std::array<uint8_t, LEGACY_VBDRIVE_CONFIG_SIZE>;
+
+constexpr uint32_t LEGACY_VBDRIVE_CONFIG_TYPE_ID = 0x44AAABFEUL;
+
+template <typename T>
+T read_legacy_config_value(const LegacyConfigBytes& bytes, size_t offset) {
+    T value{};
+    std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    return value;
+}
+
+void migrate_legacy_config_if_needed() {
+    VBDriveConfig current_config;
+    if (eeprom.read<VBDriveConfig>(&current_config, CONFIG_PLACEMENT) != HAL_OK) {
+        Error_Handler();
+    }
+    if (current_config.type_id == VBDriveConfig::TYPE_ID) {
+        return;
+    }
+
+    LegacyConfigBytes legacy{};
+    if (eeprom.read<LegacyConfigBytes>(&legacy, CONFIG_PLACEMENT) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (read_legacy_config_value<uint32_t>(legacy, 8) != LEGACY_VBDRIVE_CONFIG_TYPE_ID) {
+        return;
+    }
+
+    const uint8_t legacy_node_id = legacy[5];
+    const uint8_t legacy_nominal_baud = legacy[6];
+    const uint8_t legacy_data_baud = legacy[7];
+    if (
+        legacy_node_id == 0U ||
+        legacy_node_id > CANARD_NODE_ID_MAX ||
+        legacy_nominal_baud > static_cast<uint8_t>(FDCANNominalBaud::KHz1000) ||
+        legacy_data_baud > static_cast<uint8_t>(FDCANDataBaud::KHz8000)
+    ) {
+        return;
+    }
+
+    VBDriveConfig migrated;
+    migrated.was_configured = legacy[4] != 0U;
+    migrated.node_id = legacy_node_id;
+    migrated.fdcan_nominal_baud = static_cast<FDCANNominalBaud>(legacy_nominal_baud);
+    migrated.fdcan_data_baud = static_cast<FDCANDataBaud>(legacy_data_baud);
+    migrated.gear_ratio = legacy[12];
+
+    const float legacy_direction = read_legacy_config_value<float>(legacy, 13);
+    migrated.angle_direction = (legacy_direction == -1.0f) ? -1 : 1;
+    migrated.max_current = read_legacy_config_value<float>(legacy, 17);
+    migrated.max_torque = read_legacy_config_value<float>(legacy, 21);
+    migrated.max_speed = read_legacy_config_value<float>(legacy, 25);
+    migrated.angle_offset = read_legacy_config_value<float>(legacy, 29);
+    migrated.min_angle = read_legacy_config_value<float>(legacy, 33);
+    migrated.max_angle = read_legacy_config_value<float>(legacy, 37);
+    migrated.torque_const = read_legacy_config_value<float>(legacy, 41);
+    migrated.kp = read_legacy_config_value<float>(legacy, 45);
+    migrated.ki = read_legacy_config_value<float>(legacy, 49);
+    migrated.kd = read_legacy_config_value<float>(legacy, 53);
+    migrated.filter_a = read_legacy_config_value<float>(legacy, 57);
+    migrated.filter_g1 = read_legacy_config_value<float>(legacy, 61);
+    migrated.filter_g2 = read_legacy_config_value<float>(legacy, 65);
+    migrated.filter_g3 = read_legacy_config_value<float>(legacy, 69);
+    migrated.I_lpf_coefficient = read_legacy_config_value<float>(legacy, 73);
+
+    const uint8_t legacy_angle_encoder = legacy[77];
+    if (legacy_angle_encoder > static_cast<uint8_t>(AngleEncoderType::SHAFT)) {
+        return;
+    }
+    migrated.angle_encoder = static_cast<AngleEncoderType>(legacy_angle_encoder);
+    migrated.was_configured = migrated.are_required_params_set();
+
+    if (eeprom.write<VBDriveConfig>(&migrated, CONFIG_PLACEMENT) != HAL_OK) {
+        Error_Handler();
+    }
+
+    VBDriveConfig verified;
+    if (
+        eeprom.read<VBDriveConfig>(&verified, CONFIG_PLACEMENT) != HAL_OK ||
+        std::memcmp(&verified, &migrated, sizeof(migrated)) != 0
+    ) {
+        Error_Handler();
+    }
+}
+
+}  // namespace
+
 static STSPIN32G4 motor_gate_driver(&hi2c3, GpioPin(DRV_WAKE_GPIO_Port, DRV_WAKE_Pin));
 
 // correct elec_offset will be set by apply_calibration
@@ -271,6 +364,7 @@ void app() {
 //#pragma region StartupConfiguration
     start_timers();
     eeprom.wait_until_available();
+    migrate_legacy_config_if_needed();
     auto& app_manager = get_app_manager();
     app_manager.init();
     start_uart_recv_it();

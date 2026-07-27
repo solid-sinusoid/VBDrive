@@ -65,9 +65,18 @@ static_assert(offsetof(BaseConfigData, fdcan_nominal_baud) == 2);
 static_assert(offsetof(BaseConfigData, fdcan_data_baud) == 3);
 static_assert(offsetof(BaseConfigData, type_id) == 4);
 
-constexpr size_t CONFIG_PLACEMENT = 0;
-constexpr size_t CALIBRATION_PLACEMENT = CONFIG_PLACEMENT + sizeof(VBDriveConfig) + 1;
-constexpr size_t IND_SENSOR_STATE_PLACEMENT = CALIBRATION_PLACEMENT + sizeof(CalibrationData) + 1;
+/*
+ * Keep the deployed EEPROM placement while migrating from the old virtual
+ * BaseConfigData layout. Moving CONFIG_PLACEMENT to zero would overwrite the
+ * calibration table on already commissioned drives.
+ */
+inline constexpr size_t LEGACY_VBDRIVE_CONFIG_SIZE = 78;
+constexpr size_t CALIBRATION_PLACEMENT = 0;
+constexpr size_t CONFIG_PLACEMENT = CALIBRATION_PLACEMENT + sizeof(CalibrationData) + 1;
+constexpr size_t IND_SENSOR_STATE_PLACEMENT = CONFIG_PLACEMENT + LEGACY_VBDRIVE_CONFIG_SIZE + 1;
+
+static_assert(sizeof(CalibrationData) == 8204);
+static_assert(sizeof(VBDriveConfig) <= LEGACY_VBDRIVE_CONFIG_SIZE);
 
 struct CommandState: AppState {
     static constexpr AppStateT NOT_CALIBRATED{4};
