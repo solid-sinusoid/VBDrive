@@ -56,6 +56,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${USER_SOURCES}
     ${LIBVOLTBRO_SOURCES}
 )
+set_source_files_properties(
+    App/app.cpp
+    App/common.cpp
+    App/communications.cpp
+    App/fdcan.cpp
+    App/state_manager.cpp
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release>:-Os>"
+)
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     App
@@ -73,7 +81,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     libcxxcanard
     ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/CMSIS/DSP/Lib/GCC/libarm_cortexM4lf_math.a
 )
-include(Drivers/cyphal_types/cyphal_types.cmake)
+include(Drivers/libcxxcanard/examples/cyphal_types.cmake)
 cyphal_add_dsdl_types(${CMAKE_PROJECT_NAME}
     TYPE_REPOS
         ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/cyphal_types/public_regulated_data_types
@@ -111,6 +119,7 @@ set(
 add_custom_command(
     POST_BUILD
     TARGET ${CMAKE_PROJECT_NAME}
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.hex
     COMMAND arm-none-eabi-objcopy -O ihex ${CMAKE_PROJECT_NAME}.elf ${CMAKE_PROJECT_NAME}.hex
 )
 
