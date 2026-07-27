@@ -2,6 +2,7 @@
 #include "app.h"
 
 #include <memory>
+#include <cmath>
 #include <type_traits>
 
 #include "tim.h"
@@ -192,8 +193,8 @@ void create_motor(VBDriveConfig& config_data) {
         // Built-in constant parameters
         DriveInfo {
             .torque_const = value_or_default(config_data.torque_const, VBDriveDefaults::TORQUE_CONST),
-            .max_current = 30.0,
-            .max_torque = 30.0f,
+            .max_current = 100.0,
+            .max_torque = 100.0f,
             .stall_current = 6.0f,
             .stall_timeout = 3.0f,
             .stall_tolerance = 0.2f,
@@ -261,6 +262,7 @@ void apply_calibration() {
 
 static void persist_pending_config_if_needed();
 static void reboot_to_bootloader_if_requested();
+static void stop_motor_if_requested();
 
 void app() {
 #ifdef STACK_PROFILE
@@ -297,7 +299,8 @@ void app() {
 
     setup_cordic();
     create_motor(config_data);
-    motor->start();
+    motor->set_foc_point(FOCTarget{0});
+    motor->set_state(false);
     apply_calibration();
     motor->set_foc_point(FOCTarget{0});
 
@@ -323,6 +326,9 @@ void app() {
     while(true) {
         if (app_manager.is_app_running()) {
             cyphal_loop();
+#ifndef NO_CYPHAL
+            stop_motor_if_requested();
+#endif
             persist_pending_config_if_needed();
             reboot_to_bootloader_if_requested();
         }
@@ -362,11 +368,27 @@ static constexpr CanardPortID SPECIFIC_CONTROL_PORT = 3407;
 static uint32_t invalid_commands_counter = 0;
 static bool config_save_pending = false;
 static bool bootloader_reboot_pending = false;
+static bool motor_stop_pending = false;
+
+static bool is_zero_release_command(const FOCCommand& msg) {
+    static constexpr float EPSILON = 1e-6f;
+    return (
+        std::fabs(msg._torque.newton_meter) <= EPSILON &&
+        std::fabs(msg.angle.radian) <= EPSILON &&
+        std::fabs(msg.velocity.radian_per_second) <= EPSILON &&
+        std::fabs(msg.angle_kp.value) <= EPSILON &&
+        std::fabs(msg.velocity_kp.value) <= EPSILON &&
+        std::fabs(msg.I_kp.value) <= EPSILON &&
+        std::fabs(msg.I_ki.value) <= EPSILON
+    );
+}
 
 using ConfigFloatSetter = void (*)(VBDriveConfig&, float);
 using ConfigFloatGetter = float (*)(const VBDriveConfig&);
 using ConfigU32Setter = bool (*)(VBDriveConfig&, uint32_t);
 using ConfigU32Getter = uint32_t (*)(const VBDriveConfig&);
+using RuntimeFloatSetter = bool (FOC::*)(float);
+using RuntimeFloatGetter = float (FOC::*)() const;
 
 static bool request_config_save(VBDriveConfig& config) {
     config.was_configured = config.are_required_params_set();
@@ -382,6 +404,14 @@ static void persist_pending_config_if_needed() {
     auto& config = get_app_manager().get_config();
     config.was_configured = config.are_required_params_set();
     HAL_IMPORTANT(get_eeprom().write<VBDriveConfig>(&config, CONFIG_PLACEMENT))
+}
+
+static void stop_motor_if_requested() {
+    if (!motor_stop_pending) {
+        return;
+    }
+    motor_stop_pending = false;
+    motor->set_state(false);
 }
 
 static void reboot_to_bootloader_if_requested() {
@@ -477,6 +507,14 @@ public:
     // NOTE: transfer parameter required by the interface, but not used in this implementation
     void handler(const FOCCommand& msg, CanardRxTransfer* _) override {
     #pragma GCC diagnostic pop
+        if (is_zero_release_command(msg)) {
+            motor_stop_pending = false;
+            motor->set_foc_point(FOCTarget{0});
+            motor->set_current_regulator_params(0.0f, 0.0f);
+            motor->set_state(false);
+            return;
+        }
+
         bool is_valid = motor->set_foc_point(FOCTarget {
             .torque = msg._torque.newton_meter,
             .angle = msg.angle.radian,
@@ -524,7 +562,7 @@ public:
 
 // NOTE: underlying CanardRxSubscriptions are HUGE - 552 bytes each. C++ wrapper size is negligible in comparison
 ReservedObject<NodeInfoReader> node_info_reader;
-ReservedObject<RegistersHandler<22>> registers_handler;
+ReservedObject<RegistersHandler<25>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
 ReservedObject<SpecificControlSub> specific_control_sub;
 
@@ -639,9 +677,37 @@ void setup_subscriptions() {
             }
         };
     };
+    auto make_runtime_float_register = [](
+        const char* name,
+        RuntimeFloatGetter getter,
+        RuntimeFloatSetter setter
+    ) -> RegisterDefinition {
+        return {
+            name,
+            [getter, setter](
+                const uavcan_register_Value_1_0& v_in,
+                uavcan_register_Value_1_0& v_out,
+                RegisterAccessResponse& response
+            ) {
+                if (v_in._tag_ != REGISTER_EMPTY_TAG) {
+                    float value = 0.0f;
+                    if (
+                        !parse_register_real32(v_in, value) ||
+                        !(motor->*setter)(value)
+                    ) {
+                        invalid_commands_counter += 1;
+                    }
+                }
+
+                response.persistent = false;
+                response._mutable = true;
+                fill_register_real32(v_out, (motor->*getter)());
+            }
+        };
+    };
 
     registers_handler.create(
-        std::array<RegisterDefinition, 22>{{
+        std::array<RegisterDefinition, 25>{{
             {
                 "state.is_on",
                 [](
@@ -652,13 +718,18 @@ void setup_subscriptions() {
                     if (v_in._tag_ != REGISTER_EMPTY_TAG) {
                         bool value = false;
                         if (parse_bool_register_value_robust(v_in, value)) {
-                            motor->set_state(value);
+                            if (value) {
+                                motor_stop_pending = false;
+                                motor->set_state(true);
+                            } else {
+                                motor_stop_pending = true;
+                            }
                         }
                     }
 
                     response.persistent = false;
                     response._mutable = true;
-                    fill_register_bit(v_out, motor->is_on());
+                    fill_register_bit(v_out, motor_stop_pending ? false : motor->is_on());
                 }
             },
             {
@@ -674,6 +745,21 @@ void setup_subscriptions() {
                     fill_register_natural32(v_out, invalid_commands_counter);
                 }
             },
+            make_runtime_float_register(
+                "ctrl.vel_lpf",
+                &FOC::get_velocity_lpf_cutoff_hz,
+                &FOC::set_velocity_lpf_cutoff_hz
+            ),
+            make_runtime_float_register(
+                "ctrl.pos_slew",
+                &FOC::get_position_slew_rad_per_s,
+                &FOC::set_position_slew_rad_per_s
+            ),
+            make_runtime_float_register(
+                "ctrl.pos_db",
+                &FOC::get_position_deadband_rad,
+                &FOC::set_position_deadband_rad
+            ),
             {
                 "command.bootloader",
                 [](
