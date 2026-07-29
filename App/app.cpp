@@ -458,6 +458,17 @@ using SpecificControl = voltbro_foc_specific_control_1_0;
 static constexpr CanardPortID FOC_COMMAND_PORT = 2107;
 static constexpr CanardPortID FOC_STATE_PORT = 3811;
 static constexpr CanardPortID SPECIFIC_CONTROL_PORT = 3407;
+// Six drives share one CAN FD bus. At 1 kHz per drive, state telemetry
+// starves lower-priority node IDs once ros2_control commands are added.
+// 200 Hz per drive stays above the 150 Hz ROS control rate with ample
+// bandwidth margin.
+static constexpr millis FOC_STATE_PERIOD_MS = 5;
+static constexpr float MIN_VALID_STATOR_TEMP_C = -40.0f;
+static constexpr float MAX_VALID_STATOR_TEMP_C = 200.0f;
+// A motor cannot cool by tens of degrees in a fraction of a second.
+// Limiting only the downward slope rejects PWM-correlated cold spikes
+// without delaying the safety-critical reporting of rising temperature.
+static constexpr float MAX_STATOR_COOLING_C_PER_SECOND = 1.0f;
 
 static uint32_t invalid_commands_counter = 0;
 static bool config_save_pending = false;
@@ -569,22 +580,58 @@ void in_loop_reporting(millis current_t) {
     }
 
     static millis report_time = 0;
-    EACH_N(current_t, report_time, 1, {
+    static bool stator_temperature_initialized = false;
+    static float filtered_stator_temperature_c = NAN;
+    static millis last_stator_temperature_update_ms = 0;
+    EACH_N(current_t, report_time, FOC_STATE_PERIOD_MS, {
         FOCState state_msg = {};
 
         state_msg.timestamp.microsecond = system_time();
 
         state_msg.angle.radian = motor->get_angle();
         state_msg.velocity.radian_per_second = motor->get_velocity();
-        state_msg._torque.newton_meter = motor->get_torque();
-
-        state_msg.current.ampere = motor->get_working_current();
+        if (motor->is_on()) {
+            state_msg._torque.newton_meter = motor->get_torque();
+            state_msg.current.ampere = motor->get_working_current();
+        } else {
+            // The controller retains its last Iq/torque estimates after the
+            // gate driver is disabled. Reporting those stale values makes a
+            // safely disabled motor look energized.
+            state_msg._torque.newton_meter = 0.0f;
+            state_msg.current.ampere = 0.0f;
+        }
         state_msg.bus_voltage.volt = motor_inverter.get_busV();
 
         constexpr float KELVIN_OFFSET = 273.15f;
         motor_inverter.update_temperature();
         state_msg.mcu_temp.kelvin = motor_inverter.get_mcu_temperature() + KELVIN_OFFSET;
-        state_msg.stator_temp.kelvin = motor_inverter.get_stator_temperature() + KELVIN_OFFSET;
+        const float raw_stator_temperature_c = motor_inverter.get_stator_temperature();
+        if (
+            !std::isfinite(raw_stator_temperature_c) ||
+            raw_stator_temperature_c < MIN_VALID_STATOR_TEMP_C ||
+            raw_stator_temperature_c > MAX_VALID_STATOR_TEMP_C
+        ) {
+            // Do not hide a disconnected or failed sensor behind its last
+            // plausible value. The host safety layer treats NaN as unavailable.
+            state_msg.stator_temp.kelvin = NAN;
+        } else {
+            if (!stator_temperature_initialized) {
+                stator_temperature_initialized = true;
+                filtered_stator_temperature_c = raw_stator_temperature_c;
+            } else if (raw_stator_temperature_c >= filtered_stator_temperature_c) {
+                filtered_stator_temperature_c = raw_stator_temperature_c;
+            } else {
+                const millis elapsed_ms = current_t - last_stator_temperature_update_ms;
+                const float max_drop =
+                    MAX_STATOR_COOLING_C_PER_SECOND * static_cast<float>(elapsed_ms) / 1000.0f;
+                filtered_stator_temperature_c = std::fmax(
+                    raw_stator_temperature_c,
+                    filtered_stator_temperature_c - max_drop
+                );
+            }
+            last_stator_temperature_update_ms = current_t;
+            state_msg.stator_temp.kelvin = filtered_stator_temperature_c + KELVIN_OFFSET;
+        }
 
         state_msg.has_fault.value = false; // TODO: fault check
 

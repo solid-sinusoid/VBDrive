@@ -157,7 +157,7 @@ The BLDC Motor Controller communicates over **Cyphal/FDCAN** to publish real-tim
 
 | Port ID | Message Type                              | Interval | Description                                   |
 | ------- | ----------------------------------------- | -------- | --------------------------------------------- |
-| `3811`  | `voltbro.foc.state_simple.1.0`            | 1 ms     | Current state (angle, speed, torque, etc.)    |
+| `3811`  | `voltbro.foc.state_simple.1.0`            | 5 ms     | Current state (angle, speed, torque, etc.)    |
 
 ---
 
