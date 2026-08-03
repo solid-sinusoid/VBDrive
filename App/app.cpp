@@ -286,8 +286,12 @@ void create_motor(VBDriveConfig& config_data) {
         // Built-in constant parameters
         DriveInfo {
             .torque_const = value_or_default(config_data.torque_const, VBDriveDefaults::TORQUE_CONST),
-            .max_current = 100.0,
-            .max_torque = 100.0f,
+            // Absolute firmware capability. Per-node EEPROM/ROS limits remain
+            // authoritative and are lower for the wrist drives. With the
+            // intentionally normalized Kt=1 and gear=36, 7 A corresponds to
+            // 252 conditional torque-command units on Joint_1..3.
+            .max_current = 7.0f,
+            .max_torque = 252.0f,
             .stall_current = 6.0f,
             .stall_timeout = 3.0f,
             .stall_tolerance = 0.2f,
