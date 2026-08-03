@@ -186,6 +186,15 @@ SECTIONS
 
 ASSERT(. <= ORIGIN(RAM) + LENGTH(RAM), "RAM overflow: data/bss/stack/heap exceed RAM")
 
+  .app_manifest 0x0801F7C0 :
+  {
+    KEEP(*(.app_manifest))
+  } >FLASH
+
+  ASSERT(SIZEOF(.app_manifest) == 32, "VBDrive application manifest must be exactly 32 bytes")
+  ASSERT(ADDR(.app_manifest) + SIZEOF(.app_manifest) <= 0x0801F800,
+         "VBDrive application manifest overlaps VBBoot recovery metadata")
+
 
   /* Remove information from the standard libraries */
   /DISCARD/ :
