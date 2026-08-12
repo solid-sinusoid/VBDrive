@@ -50,7 +50,7 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     "LINKER:-Map=${CMAKE_PROJECT_NAME}.map"
 )
 
-file(GLOB_RECURSE USER_SOURCES "App/*.cpp")
+file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS "App/*.cpp")
 file(GLOB_RECURSE LIBVOLTBRO_SOURCES "Drivers/libvoltbro/*.cpp" "Drivers/libvoltbro/*.c")
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${USER_SOURCES}
