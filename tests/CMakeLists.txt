@@ -11,3 +11,11 @@ target_compile_features(test_foc_cycle_sync PRIVATE cxx_std_20)
 target_compile_options(test_foc_cycle_sync PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_test(NAME foc_cycle_sync COMMAND test_foc_cycle_sync)
+
+add_executable(test_monotonic_micros
+    test_monotonic_micros.cpp
+)
+target_compile_features(test_monotonic_micros PRIVATE cxx_std_20)
+target_compile_options(test_monotonic_micros PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_test(NAME monotonic_micros COMMAND test_monotonic_micros)
