@@ -86,6 +86,26 @@ __attribute__((hot)) void main_callback() {
 
     if (app_manager.is_app_running()) {
         if (auto motor = get_motor()) {
+            if (const auto applied = consume_foc_cycle_command(micros_64())) {
+                const auto& target = applied->command.target;
+                const bool accepted = motor->set_foc_point(FOCTarget{
+                    .torque = target.torque,
+                    .angle = target.angle,
+                    .velocity = target.velocity,
+                    .angle_kp = target.angle_kp,
+                    .velocity_kp = target.velocity_kp,
+                });
+                if (accepted) {
+                    motor->set_current_regulator_params(
+                        applied->command.current_kp,
+                        applied->command.current_ki);
+                } else {
+                    motor->set_foc_point(FOCTarget{0});
+                    motor->set_current_regulator_params(0.0f, 0.0f);
+                    motor->set_state(false);
+                }
+                foc_cycle_sync_complete_apply(*applied, accepted);
+            }
             motor->update();
         }
     }

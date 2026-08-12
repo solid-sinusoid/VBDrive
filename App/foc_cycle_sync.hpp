@@ -41,6 +41,7 @@ struct CycleCommand {
 struct AppliedCycle {
     CycleCommand command{};
     std::int32_t apply_offset_microsecond{};
+    std::uint64_t apply_timestamp_us{};
 };
 
 struct CommandStatus {
@@ -62,9 +63,12 @@ public:
         std::uint32_t control_period_us = 5000,
         std::uint32_t watchdog_us = 15000);
 
+    void set_mode(SyncMode mode);
+    SyncMode mode() const { return mode_; }
     StageResult stage(const CycleCommand& command, bool target_valid, std::uint64_t rx_us);
     SyncResult on_sync(std::uint16_t cycle_id, std::uint64_t rx_us);
     std::optional<AppliedCycle> consume_armed(std::uint64_t apply_us);
+    void complete_apply(const AppliedCycle& applied, bool accepted);
     bool immediate_marker(std::uint16_t cycle_id, std::uint64_t marker_us);
     WatchdogAction poll_watchdog(std::uint64_t now_us);
     std::optional<CommandStatus> pop_status();

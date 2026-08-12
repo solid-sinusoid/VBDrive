@@ -61,8 +61,9 @@ set_source_files_properties(
     App/common.cpp
     App/communications.cpp
     App/fdcan.cpp
+    App/foc_cycle_sync.cpp
     App/state_manager.cpp
-    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release>:-Os>"
+    PROPERTIES COMPILE_OPTIONS "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-Os>"
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

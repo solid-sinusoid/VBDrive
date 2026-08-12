@@ -14,6 +14,22 @@ FocCycleSync::FocCycleSync(
 {
 }
 
+void FocCycleSync::set_mode(const SyncMode mode)
+{
+    armed_slot_.store(no_slot, std::memory_order_release);
+    for (auto& slot : slots_) {
+        slot.state.store(SlotState::Empty, std::memory_order_release);
+    }
+    applied_mailbox_.valid.store(false, std::memory_order_release);
+    immediate_apply_.valid.store(false, std::memory_order_release);
+    has_last_applied_.store(false, std::memory_order_release);
+    has_last_sync_ = false;
+    watchdog_reported_ = false;
+    main_status_head_ = 0;
+    main_status_tail_ = 0;
+    mode_ = mode;
+}
+
 void FocCycleSync::push_main_status(const CommandStatus status)
 {
     const auto next = static_cast<std::uint8_t>((main_status_head_ + 1U) % status_capacity);
@@ -103,6 +119,11 @@ StageResult FocCycleSync::stage(
         slot.command = command;
         slot.marker_us = rx_us;
         slot.state.store(SlotState::Staged, std::memory_order_release);
+        if ((mode_ == SyncMode::Synchronized) && !has_last_sync_) {
+            last_sync_us_ = rx_us;
+            has_last_sync_ = true;
+            watchdog_reported_ = false;
+        }
         push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         if (mode_ == SyncMode::Immediate) {
             slot.state.store(SlotState::Armed, std::memory_order_release);
@@ -181,19 +202,33 @@ std::optional<AppliedCycle> FocCycleSync::consume_armed(const std::uint64_t appl
     }
     const auto command = slot.command;
     const auto offset = saturated_offset(apply_us, slot.marker_us);
-    last_applied_cycle_.store(command.cycle_id, std::memory_order_relaxed);
-    has_last_applied_.store(true, std::memory_order_release);
     slot.state.store(SlotState::Empty, std::memory_order_release);
+    return AppliedCycle{command, offset, apply_us};
+}
 
+void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accepted)
+{
+    if (!accepted) {
+        publish_applied_from_isr({
+            applied.command.cycle_id,
+            StatusCode::Rejected,
+            StatusReason::HardwareFault,
+            applied.apply_offset_microsecond});
+        return;
+    }
+    last_applied_cycle_.store(applied.command.cycle_id, std::memory_order_relaxed);
+    has_last_applied_.store(true, std::memory_order_release);
     if (mode_ == SyncMode::Synchronized) {
         publish_applied_from_isr(
-            {command.cycle_id, StatusCode::Applied, StatusReason::None, offset});
+            {applied.command.cycle_id,
+             StatusCode::Applied,
+             StatusReason::None,
+             applied.apply_offset_microsecond});
     } else {
-        immediate_apply_.cycle_id = command.cycle_id;
-        immediate_apply_.apply_us = apply_us;
+        immediate_apply_.cycle_id = applied.command.cycle_id;
+        immediate_apply_.apply_us = applied.apply_timestamp_us;
         immediate_apply_.valid.store(true, std::memory_order_release);
     }
-    return AppliedCycle{command, offset};
 }
 
 bool FocCycleSync::immediate_marker(

@@ -8,6 +8,7 @@
 #include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
 
 #include "state_manager.hpp"
+#include "foc_cycle_sync.hpp"
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
@@ -43,6 +44,8 @@ void start_timers();
 // app.cpp
 VBDrive* get_motor();
 EEPROM& get_eeprom();
+std::optional<AppliedCycle> consume_foc_cycle_command(micros apply_us);
+void foc_cycle_sync_complete_apply(const AppliedCycle& applied, bool accepted);
 // actions (in app.cpp)
 bool is_able_to_calibrate();
 bool do_calibrate();
