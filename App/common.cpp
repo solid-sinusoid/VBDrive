@@ -1,4 +1,5 @@
 #include "app.h"
+#include "monotonic_micros.hpp"
 
 #include "stm32g4xx_hal_tim.h"
 #include "tim.h"
@@ -6,7 +7,7 @@
 
 // Volatile is absolutely required here due to timer interrupt
 // Otherwise HAL_Delay() will not work
-static volatile uint32_t millis_k __attribute__ ((__aligned__(4))) = 0;
+static volatile micros millis_k __attribute__ ((__aligned__(8))) = 0;
 
 #ifdef MONITOR
 static volatile encoder_data value_enc = 0;
@@ -86,6 +87,26 @@ __attribute__((hot)) void main_callback() {
 
     if (app_manager.is_app_running()) {
         if (auto motor = get_motor()) {
+            if (const auto applied = consume_foc_cycle_command(micros_64())) {
+                const auto& target = applied->command.target;
+                const bool accepted = motor->set_foc_point(FOCTarget{
+                    .torque = target.torque,
+                    .angle = target.angle,
+                    .velocity = target.velocity,
+                    .angle_kp = target.angle_kp,
+                    .velocity_kp = target.velocity_kp,
+                });
+                if (accepted) {
+                    motor->set_current_regulator_params(
+                        applied->command.current_kp,
+                        applied->command.current_ki);
+                } else {
+                    motor->set_foc_point(FOCTarget{0});
+                    motor->set_current_regulator_params(0.0f, 0.0f);
+                    motor->set_state(false);
+                }
+                foc_cycle_sync_complete_apply(*applied, accepted);
+            }
             motor->update();
         }
     }
@@ -148,7 +169,22 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 }
 
 micros __attribute__((optimize("O0"))) micros_64() {
-    return ((micros)millis_32() * 1000u) + __HAL_TIM_GetCounter(&htim7);
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    const micros millis_snapshot = millis_k;
+    const uint32_t counter_before = __HAL_TIM_GetCounter(&htim7);
+    const bool update_pending = __HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) != RESET;
+    const uint32_t counter_after = __HAL_TIM_GetCounter(&htim7);
+
+    if (primask == 0U) {
+        __enable_irq();
+    }
+    return compose_micros_snapshot(
+        millis_snapshot,
+        counter_before,
+        update_pending,
+        counter_after);
 }
 
 micros system_time() {
@@ -162,11 +198,7 @@ void start_timers() {
 }
 
 millis millis_32() {
-    if (__HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) != RESET) {
-        __HAL_TIM_CLEAR_FLAG(&htim7, TIM_FLAG_UPDATE);
-        millis_k = millis_k + 1;
-    }
-    return millis_k;
+    return static_cast<millis>(micros_64() / 1000U);
 }
 
 void HAL_Delay(uint32_t delay) {

@@ -1,5 +1,6 @@
 //#pragma region Includes
 #include "app.h"
+#include "foc_cycle_sync.hpp"
 
 #include <array>
 #include <cstring>
@@ -28,9 +29,10 @@
 #include <uavcan/si/unit/angle/Scalar_1_0.hpp>
 #include <uavcan/si/unit/torque/Scalar_1_0.hpp>
 #include <uavcan/si/unit/voltage/Scalar_1_0.hpp>
-#include <voltbro/foc/command_1_0.hpp>
-#include <voltbro/foc/specific_control_1_0.hpp>
+#include <voltbro/foc/command_2_0.hpp>
+#include <voltbro/foc/command_status_1_0.hpp>
 #include <voltbro/foc/state_simple_1_0.hpp>
+#include <voltbro/foc/sync_1_0.hpp>
 
 #include <voltbro/eeprom/eeprom.hpp>
 #include <voltbro/encoders/ASxxxx/AS5047P.hpp>
@@ -132,6 +134,7 @@ namespace {
 using LegacyConfigBytes = std::array<uint8_t, LEGACY_VBDRIVE_CONFIG_SIZE>;
 
 constexpr uint32_t LEGACY_VBDRIVE_CONFIG_TYPE_ID = 0x44AAABFEUL;
+constexpr uint32_t PREVIOUS_VBDRIVE_CONFIG_TYPE_ID = 0x44AAABFFUL;
 
 template <typename T>
 T read_legacy_config_value(const LegacyConfigBytes& bytes, size_t offset) {
@@ -145,7 +148,23 @@ void migrate_legacy_config_if_needed() {
     if (eeprom.read<VBDriveConfig>(&current_config, CONFIG_PLACEMENT) != HAL_OK) {
         Error_Handler();
     }
+    if (current_config.type_id == VBDriveConfig::TYPE_ID &&
+        current_config.sync_mode <= static_cast<uint8_t>(SyncMode::Synchronized)) {
+        return;
+    }
     if (current_config.type_id == VBDriveConfig::TYPE_ID) {
+        current_config.sync_mode = static_cast<uint8_t>(SyncMode::Synchronized);
+        if (eeprom.write<VBDriveConfig>(&current_config, CONFIG_PLACEMENT) != HAL_OK) {
+            Error_Handler();
+        }
+        return;
+    }
+    if (current_config.type_id == PREVIOUS_VBDRIVE_CONFIG_TYPE_ID) {
+        current_config.type_id = VBDriveConfig::TYPE_ID;
+        current_config.sync_mode = static_cast<uint8_t>(SyncMode::Synchronized);
+        if (eeprom.write<VBDriveConfig>(&current_config, CONFIG_PLACEMENT) != HAL_OK) {
+            Error_Handler();
+        }
         return;
     }
 
@@ -231,8 +250,17 @@ VBInverter motor_inverter(&hadc1, &hadc2);
 alignas(4) static CalibrationData calibration_data;  // avoid stack overflow and misalignment issues for I2C EEPROM
 static std::aligned_storage_t<sizeof(VBDrive), alignof(VBDrive)> motor_storage;
 static VBDrive* motor = nullptr;
+static FocCycleSync foc_cycle_sync{SyncMode::Synchronized};
 VBDrive* get_motor() {
     return motor;
+}
+
+std::optional<AppliedCycle> consume_foc_cycle_command(const micros apply_us) {
+    return foc_cycle_sync.consume_armed(apply_us);
+}
+
+void foc_cycle_sync_complete_apply(const AppliedCycle& applied, const bool accepted) {
+    foc_cycle_sync.complete_apply(applied, accepted);
 }
 
 static int8_t config_angle_direction(const VBDriveConfig& config_data) {
@@ -373,6 +401,10 @@ void app() {
     app_manager.init();
     start_uart_recv_it();
     auto& config_data = app_manager.get_config();
+    foc_cycle_sync.set_mode(
+        config_data.sync_mode == static_cast<uint8_t>(SyncMode::Immediate)
+            ? SyncMode::Immediate
+            : SyncMode::Synchronized);
     if (!app_manager.is_app_running() && config_data.are_required_params_set()) {
         config_data.was_configured = true;
         app_manager.set_state(CommandState::RUNNING);
@@ -455,13 +487,15 @@ void app() {
 
 #ifndef NO_CYPHAL
 //#pragma region Cyphal
-using FOCCommand = voltbro_foc_command_1_0;
+using FOCCommand = voltbro_foc_command_2_0;
+using FOCCommandStatus = voltbro_foc_command_status_1_0;
+using FOCSync = voltbro_foc_sync_1_0;
 using FOCState = voltbro_foc_state_simple_1_0;
-using SpecificControl = voltbro_foc_specific_control_1_0;
 
 static constexpr CanardPortID FOC_COMMAND_PORT = 2107;
+static constexpr CanardPortID FOC_SYNC_PORT = 3809;
+static constexpr CanardPortID FOC_COMMAND_STATUS_PORT = 3810;
 static constexpr CanardPortID FOC_STATE_PORT = 3811;
-static constexpr CanardPortID SPECIFIC_CONTROL_PORT = 3407;
 // Six drives share one CAN FD bus. At 1 kHz per drive, state telemetry
 // starves lower-priority node IDs once ros2_control commands are added.
 // 200 Hz per drive stays above the 150 Hz ROS control rate with ample
@@ -473,24 +507,12 @@ static constexpr float MAX_VALID_STATOR_TEMP_C = 200.0f;
 // Limiting only the downward slope rejects PWM-correlated cold spikes
 // without delaying the safety-critical reporting of rising temperature.
 static constexpr float MAX_STATOR_COOLING_C_PER_SECOND = 1.0f;
+static constexpr CanardNodeID FOC_SYNC_MASTER_NODE_ID = 42;
 
 static uint32_t invalid_commands_counter = 0;
 static bool config_save_pending = false;
 static bool bootloader_reboot_pending = false;
 static bool motor_stop_pending = false;
-
-static bool is_zero_release_command(const FOCCommand& msg) {
-    static constexpr float EPSILON = 1e-6f;
-    return (
-        std::fabs(msg._torque.newton_meter) <= EPSILON &&
-        std::fabs(msg.angle.radian) <= EPSILON &&
-        std::fabs(msg.velocity.radian_per_second) <= EPSILON &&
-        std::fabs(msg.angle_kp.value) <= EPSILON &&
-        std::fabs(msg.velocity_kp.value) <= EPSILON &&
-        std::fabs(msg.I_kp.value) <= EPSILON &&
-        std::fabs(msg.I_ki.value) <= EPSILON
-    );
-}
 
 using ConfigFloatSetter = void (*)(VBDriveConfig&, float);
 using ConfigFloatGetter = float (*)(const VBDriveConfig&);
@@ -503,6 +525,23 @@ static bool request_config_save(VBDriveConfig& config) {
     config.was_configured = config.are_required_params_set();
     config_save_pending = true;
     return true;
+}
+
+static bool update_sync_mode_register(const uint32_t value) {
+    if (value > static_cast<uint32_t>(SyncMode::Synchronized) ||
+        (motor != nullptr && motor->is_on())) {
+        return false;
+    }
+    auto& config = get_app_manager().get_config();
+    config.sync_mode = static_cast<uint8_t>(value);
+    if (motor != nullptr) {
+        HAL_TIM_Base_Stop_IT(&htim4);
+        foc_cycle_sync.set_mode(static_cast<SyncMode>(value));
+        HAL_TIM_Base_Start_IT(&htim4);
+    } else {
+        foc_cycle_sync.set_mode(static_cast<SyncMode>(value));
+    }
+    return request_config_save(config);
 }
 
 static void persist_pending_config_if_needed() {
@@ -583,6 +622,29 @@ void in_loop_reporting(millis current_t) {
         return;
     }
 
+    if (foc_cycle_sync.poll_watchdog(micros_64()) == WatchdogAction::Disable) {
+        motor->set_foc_point(FOCTarget{0});
+        motor->set_current_regulator_params(0.0f, 0.0f);
+        motor->set_state(false);
+    }
+
+    static CanardTransferID command_status_transfer_id = 0;
+    for (std::size_t count = 0; count < 8; ++count) {
+        const auto status = foc_cycle_sync.pop_status();
+        if (!status.has_value()) {
+            break;
+        }
+        FOCCommandStatus status_msg{};
+        status_msg.cycle_id = status->cycle_id;
+        status_msg.status = static_cast<uint8_t>(status->status);
+        status_msg.reason = static_cast<uint8_t>(status->reason);
+        status_msg.apply_offset_microsecond = status->apply_offset_microsecond;
+        get_interface()->send_msg(
+            &status_msg,
+            FOC_COMMAND_STATUS_PORT,
+            &command_status_transfer_id);
+    }
+
     static millis report_time = 0;
     static bool stator_temperature_initialized = false;
     static float filtered_stator_temperature_c = NAN;
@@ -647,59 +709,50 @@ void in_loop_reporting(millis current_t) {
 class FOCCommandSub: public AbstractSubscription<FOCCommand> {
 public:
     FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCCommand>(interface, port_id) {};
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wunused-parameter"
-    // NOTE: transfer parameter required by the interface, but not used in this implementation
-    void handler(const FOCCommand& msg, CanardRxTransfer* _) override {
-    #pragma GCC diagnostic pop
-        if (is_zero_release_command(msg)) {
-            motor_stop_pending = false;
-            motor->set_foc_point(FOCTarget{0});
-            motor->set_current_regulator_params(0.0f, 0.0f);
-            motor->set_state(false);
-            return;
-        }
-
-        bool is_valid = motor->set_foc_point(FOCTarget {
+    void handler(const FOCCommand& msg, CanardRxTransfer* transfer) override {
+        const FocCycleTarget target{
             .torque = msg._torque.newton_meter,
             .angle = msg.angle.radian,
             .velocity = msg.velocity.radian_per_second,
             .angle_kp = msg.angle_kp.value,
             .velocity_kp = msg.velocity_kp.value
-        });
-        if (!is_valid) {
+        };
+        const FOCTarget motor_target{
+            .torque = target.torque,
+            .angle = target.angle,
+            .velocity = target.velocity,
+            .angle_kp = target.angle_kp,
+            .velocity_kp = target.velocity_kp,
+        };
+        const bool valid = motor != nullptr &&
+                           motor->is_foc_point_valid(motor_target) &&
+                           std::isfinite(msg.I_kp.value) &&
+                           std::isfinite(msg.I_ki.value);
+        const auto result = foc_cycle_sync.stage(
+            CycleCommand{
+                .cycle_id = msg.cycle_id,
+                .target = target,
+                .current_kp = msg.I_kp.value,
+                .current_ki = msg.I_ki.value,
+            },
+            valid,
+            transfer->timestamp_usec);
+        if (result == StageResult::Rejected) {
             invalid_commands_counter += 1;
         }
-        motor->set_current_regulator_params(msg.I_kp.value, msg.I_ki.value);
     }
 };
 
-class SpecificControlSub: public AbstractSubscription<SpecificControl> {
+class FOCSyncSub: public AbstractSubscription<FOCSync> {
 public:
-    SpecificControlSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<SpecificControl>(interface, port_id) {};
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wunused-parameter"
-    // NOTE: transfer parameter required by the interface, but not used in this implementation
-    void handler(const SpecificControl& msg, CanardRxTransfer* _) override {
-    #pragma GCC diagnostic pop
-        bool is_valid = false;
-        switch (msg.set_point_type){
-            case voltbro_foc_specific_control_1_0_VELOCITY:
-                is_valid = motor->set_velocity_point(msg.set_point_value);
-                break;
-            case voltbro_foc_specific_control_1_0_TORQUE:
-                is_valid = motor->set_torque_point(msg.set_point_value);
-                break;
-            case voltbro_foc_specific_control_1_0_POSITION:
-                is_valid = motor->set_angle_point(msg.set_point_value);
-                break;
-            case voltbro_foc_specific_control_1_0_VOLTAGE:
-                is_valid = motor->set_voltage_point(msg.set_point_value);
-                break;
-            default:
-                break;
+    FOCSyncSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCSync>(interface, port_id) {};
+    void handler(const FOCSync& msg, CanardRxTransfer* transfer) override {
+        if (transfer->metadata.remote_node_id != FOC_SYNC_MASTER_NODE_ID) {
+            return;
         }
-        if (!is_valid) {
+        if (foc_cycle_sync.mode() == SyncMode::Immediate) {
+            foc_cycle_sync.immediate_marker(msg.cycle_id, transfer->timestamp_usec);
+        } else if (foc_cycle_sync.on_sync(msg.cycle_id, transfer->timestamp_usec) == SyncResult::Rejected) {
             invalid_commands_counter += 1;
         }
     }
@@ -707,9 +760,9 @@ public:
 
 // NOTE: underlying CanardRxSubscriptions are HUGE - 552 bytes each. C++ wrapper size is negligible in comparison
 ReservedObject<NodeInfoReader> node_info_reader;
-ReservedObject<RegistersHandler<25>> registers_handler;
+ReservedObject<RegistersHandler<27>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
-ReservedObject<SpecificControlSub> specific_control_sub;
+ReservedObject<FOCSyncSub> foc_sync_sub;
 
 static bool parse_bool_register_value_robust(const uavcan_register_Value_1_0& value, bool& parsed) {
     if (parse_register_bit(value, parsed)) {
@@ -852,7 +905,7 @@ void setup_subscriptions() {
     };
 
     registers_handler.create(
-        std::array<RegisterDefinition, 25>{{
+        std::array<RegisterDefinition, 27>{{
             {
                 "state.is_on",
                 [](
@@ -888,6 +941,40 @@ void setup_subscriptions() {
                     response.persistent = false;
                     response._mutable = false;
                     fill_register_natural32(v_out, invalid_commands_counter);
+                }
+            },
+            {
+                "sync.version",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    (void) v_in;
+                    response.persistent = false;
+                    response._mutable = false;
+                    fill_register_natural32(v_out, 1U);
+                }
+            },
+            {
+                "sync.mode",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    if (v_in._tag_ != REGISTER_EMPTY_TAG) {
+                        uint32_t value = 0;
+                        if (!parse_register_natural32(v_in, value) ||
+                            !update_sync_mode_register(value)) {
+                            invalid_commands_counter += 1;
+                        }
+                    }
+                    response.persistent = true;
+                    response._mutable = motor == nullptr || !motor->is_on();
+                    fill_register_natural32(
+                        v_out,
+                        get_app_manager().get_config().sync_mode);
                 }
             },
             make_runtime_float_register(
@@ -1064,8 +1151,8 @@ void setup_subscriptions() {
         0
     );
 
-    specific_control_sub.create(cyphal_interface, SPECIFIC_CONTROL_PORT + node_id);
     foc_command_sub.create(cyphal_interface, FOC_COMMAND_PORT + node_id);
+    foc_sync_sub.create(cyphal_interface, FOC_SYNC_PORT);
 
     HAL_IMPORTANT(apply_filter(
         0,
@@ -1088,7 +1175,7 @@ void setup_subscriptions() {
     HAL_IMPORTANT(apply_filter(
         3,
         &hfdcan1,
-        specific_control_sub->make_filter(node_id)
+        foc_sync_sub->make_filter(node_id)
     ))
 }
 //#pragma endregion
