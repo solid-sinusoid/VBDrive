@@ -50,7 +50,7 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     "LINKER:-Map=${CMAKE_PROJECT_NAME}.map"
 )
 
-file(GLOB_RECURSE USER_SOURCES "App/*.cpp")
+file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS "App/*.cpp")
 file(GLOB_RECURSE LIBVOLTBRO_SOURCES "Drivers/libvoltbro/*.cpp" "Drivers/libvoltbro/*.c")
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${USER_SOURCES}
@@ -61,8 +61,9 @@ set_source_files_properties(
     App/common.cpp
     App/communications.cpp
     App/fdcan.cpp
+    App/foc_cycle_sync.cpp
     App/state_manager.cpp
-    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release>:-Os>"
+    PROPERTIES COMPILE_OPTIONS "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-Os>"
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

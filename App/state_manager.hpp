@@ -23,7 +23,7 @@ namespace VBDriveDefaults {
     inline constexpr float I_LPF = 0.0925f;
 }  // namespace VBDriveDefaults
 
-inline constexpr uint32_t VBDRIVE_CONFIG_TYPE_ID = 0x44AAABFF;
+inline constexpr uint32_t VBDRIVE_CONFIG_TYPE_ID = 0x44AAAC00;
 
 struct __attribute__((packed)) VBDriveConfig: public BaseConfigData {
     static constexpr uint32_t TYPE_ID = VBDRIVE_CONFIG_TYPE_ID;
@@ -45,10 +45,12 @@ struct __attribute__((packed)) VBDriveConfig: public BaseConfigData {
     float filter_g3 = NAN;
     float I_lpf_coefficient = NAN;
     AngleEncoderType angle_encoder = AngleEncoderType::ROTOR;
+    uint8_t sync_mode = 1;
 
     VBDriveConfig(): BaseConfigData() {
         type_id = VBDriveConfig::TYPE_ID;
         angle_encoder = AngleEncoderType::ROTOR;
+        sync_mode = 1;
     }
 
     bool are_required_params_set();
