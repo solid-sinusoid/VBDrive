@@ -23,9 +23,13 @@ void FocCycleSync::reset_session()
     applied_mailbox_.valid.store(false, std::memory_order_release);
     immediate_apply_.valid.store(false, std::memory_order_release);
     last_apply_offset_microsecond_.store(0, std::memory_order_relaxed);
+    last_applied_phase_.store(
+        static_cast<std::uint8_t>(SyncPhase::Run),
+        std::memory_order_relaxed);
     has_last_applied_.store(false, std::memory_order_release);
     has_last_sync_ = false;
     watchdog_reported_ = false;
+    session_phase_ = SessionPhase::Idle;
     main_status_head_ = 0;
     main_status_tail_ = 0;
 }
@@ -121,11 +125,6 @@ StageResult FocCycleSync::stage(
         slot.command = command;
         slot.marker_us = rx_us;
         slot.state.store(SlotState::Staged, std::memory_order_release);
-        if ((mode_ == SyncMode::Synchronized) && !has_last_sync_) {
-            last_sync_us_ = rx_us;
-            has_last_sync_ = true;
-            watchdog_reported_ = false;
-        }
         push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         if (mode_ == SyncMode::Immediate) {
             slot.state.store(SlotState::Armed, std::memory_order_release);
@@ -138,13 +137,26 @@ StageResult FocCycleSync::stage(
     return StageResult::Rejected;
 }
 
-SyncResult FocCycleSync::on_sync(const std::uint16_t cycle_id, const std::uint64_t rx_us)
+SyncResult FocCycleSync::on_sync(
+    const std::uint16_t cycle_id,
+    const SyncPhase phase,
+    const std::uint64_t rx_us)
 {
     if (mode_ != SyncMode::Synchronized) {
         return SyncResult::Ignored;
     }
+    if ((phase != SyncPhase::Prepare) && (phase != SyncPhase::Run)) {
+        push_main_status({cycle_id, StatusCode::Rejected, StatusReason::OutOfRange, 0});
+        return SyncResult::Rejected;
+    }
+    if ((session_phase_ == SessionPhase::Run) && (phase == SyncPhase::Prepare)) {
+        push_main_status({cycle_id, StatusCode::Rejected, StatusReason::OutOfRange, 0});
+        return SyncResult::Rejected;
+    }
     if (has_last_applied_.load(std::memory_order_acquire) &&
-        (last_applied_cycle_.load(std::memory_order_relaxed) == cycle_id)) {
+        (last_applied_cycle_.load(std::memory_order_relaxed) == cycle_id) &&
+        (last_applied_phase_.load(std::memory_order_relaxed) ==
+         static_cast<std::uint8_t>(phase))) {
         push_main_status({
             cycle_id,
             StatusCode::Applied,
@@ -167,12 +179,24 @@ SyncResult FocCycleSync::on_sync(const std::uint16_t cycle_id, const std::uint64
             return SyncResult::Rejected;
         }
         slot.marker_us = rx_us;
+        slot.phase = phase;
         slot.state.store(SlotState::Armed, std::memory_order_release);
         armed_slot_.store(index, std::memory_order_release);
+        session_phase_ =
+            (phase == SyncPhase::Run) ? SessionPhase::Run : SessionPhase::Prepare;
         last_sync_us_ = rx_us;
         has_last_sync_ = true;
         watchdog_reported_ = false;
         return SyncResult::Armed;
+    }
+
+    if (phase == SyncPhase::Prepare) {
+        if (session_phase_ == SessionPhase::Prepare) {
+            last_sync_us_ = rx_us;
+            has_last_sync_ = true;
+            watchdog_reported_ = false;
+        }
+        return SyncResult::Ignored;
     }
 
     push_main_status({cycle_id, StatusCode::Rejected, StatusReason::NoMatchingCommand, 0});
@@ -210,7 +234,7 @@ std::optional<AppliedCycle> FocCycleSync::consume_armed(const std::uint64_t appl
     const auto command = slot.command;
     const auto offset = saturated_offset(apply_us, slot.marker_us);
     slot.state.store(SlotState::Empty, std::memory_order_release);
-    return AppliedCycle{command, offset, apply_us};
+    return AppliedCycle{command, slot.phase, offset, apply_us};
 }
 
 void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accepted)
@@ -227,6 +251,9 @@ void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accept
         applied.apply_offset_microsecond,
         std::memory_order_relaxed);
     last_applied_cycle_.store(applied.command.cycle_id, std::memory_order_relaxed);
+    last_applied_phase_.store(
+        static_cast<std::uint8_t>(applied.phase),
+        std::memory_order_relaxed);
     has_last_applied_.store(true, std::memory_order_release);
     if (mode_ == SyncMode::Synchronized) {
         publish_applied_from_isr(
@@ -262,10 +289,12 @@ WatchdogAction FocCycleSync::poll_watchdog(const std::uint64_t now_us)
         return WatchdogAction::None;
     }
     const auto elapsed = now_us - last_sync_us_;
+    const auto active_watchdog_us =
+        (session_phase_ == SessionPhase::Prepare) ? prepare_watchdog_us : watchdog_us_;
     if (elapsed < control_period_us_) {
         return WatchdogAction::None;
     }
-    if (elapsed < watchdog_us_) {
+    if (elapsed < active_watchdog_us) {
         return WatchdogAction::Hold;
     }
     if (!watchdog_reported_) {

@@ -7,6 +7,7 @@
 #include <optional>
 
 enum class SyncMode : std::uint8_t { Immediate = 0, Synchronized = 1 };
+enum class SyncPhase : std::uint8_t { Prepare = 0, Run = 1 };
 enum class StatusCode : std::uint8_t { Staged = 0, Applied = 1, Rejected = 2, Timeout = 3 };
 enum class StatusReason : std::uint8_t {
     None = 0,
@@ -40,6 +41,7 @@ struct CycleCommand {
 
 struct AppliedCycle {
     CycleCommand command{};
+    SyncPhase phase{SyncPhase::Run};
     std::int32_t apply_offset_microsecond{};
     std::uint64_t apply_timestamp_us{};
 };
@@ -67,7 +69,7 @@ public:
     void set_mode(SyncMode mode);
     SyncMode mode() const { return mode_; }
     StageResult stage(const CycleCommand& command, bool target_valid, std::uint64_t rx_us);
-    SyncResult on_sync(std::uint16_t cycle_id, std::uint64_t rx_us);
+    SyncResult on_sync(std::uint16_t cycle_id, SyncPhase phase, std::uint64_t rx_us);
     std::optional<AppliedCycle> consume_armed(std::uint64_t apply_us);
     void complete_apply(const AppliedCycle& applied, bool accepted);
     bool immediate_marker(std::uint16_t cycle_id, std::uint64_t marker_us);
@@ -80,6 +82,7 @@ private:
     struct Slot {
         std::atomic<SlotState> state{SlotState::Empty};
         CycleCommand command{};
+        SyncPhase phase{SyncPhase::Run};
         std::uint64_t marker_us{};
     };
 
@@ -96,6 +99,9 @@ private:
 
     static constexpr std::uint8_t no_slot = std::numeric_limits<std::uint8_t>::max();
     static constexpr std::size_t status_capacity = 8;
+    static constexpr std::uint32_t prepare_watchdog_us = 250000U;
+
+    enum class SessionPhase : std::uint8_t { Idle, Prepare, Run };
 
     void push_main_status(CommandStatus status);
     void publish_applied_from_isr(CommandStatus status);
@@ -109,11 +115,13 @@ private:
     std::array<Slot, 2> slots_{};
     std::atomic<std::uint8_t> armed_slot_{no_slot};
     std::atomic<std::uint16_t> last_applied_cycle_{};
+    std::atomic<std::uint8_t> last_applied_phase_{};
     std::atomic<std::int32_t> last_apply_offset_microsecond_{};
     std::atomic<bool> has_last_applied_{false};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
+    SessionPhase session_phase_{SessionPhase::Idle};
     std::array<CommandStatus, status_capacity> main_statuses_{};
     std::uint8_t main_status_head_{};
     std::uint8_t main_status_tail_{};
