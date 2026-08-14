@@ -22,6 +22,7 @@ void FocCycleSync::reset_session()
     }
     applied_mailbox_.valid.store(false, std::memory_order_release);
     immediate_apply_.valid.store(false, std::memory_order_release);
+    last_apply_offset_microsecond_.store(0, std::memory_order_relaxed);
     has_last_applied_.store(false, std::memory_order_release);
     has_last_sync_ = false;
     watchdog_reported_ = false;
@@ -144,6 +145,11 @@ SyncResult FocCycleSync::on_sync(const std::uint16_t cycle_id, const std::uint64
     }
     if (has_last_applied_.load(std::memory_order_acquire) &&
         (last_applied_cycle_.load(std::memory_order_relaxed) == cycle_id)) {
+        push_main_status({
+            cycle_id,
+            StatusCode::Applied,
+            StatusReason::None,
+            last_apply_offset_microsecond_.load(std::memory_order_relaxed)});
         return SyncResult::Ignored;
     }
     if (find_slot(cycle_id, SlotState::Armed) != nullptr) {
@@ -217,6 +223,9 @@ void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accept
             applied.apply_offset_microsecond});
         return;
     }
+    last_apply_offset_microsecond_.store(
+        applied.apply_offset_microsecond,
+        std::memory_order_relaxed);
     last_applied_cycle_.store(applied.command.cycle_id, std::memory_order_relaxed);
     has_last_applied_.store(true, std::memory_order_release);
     if (mode_ == SyncMode::Synchronized) {

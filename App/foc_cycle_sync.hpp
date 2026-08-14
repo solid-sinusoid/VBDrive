@@ -109,6 +109,7 @@ private:
     std::array<Slot, 2> slots_{};
     std::atomic<std::uint8_t> armed_slot_{no_slot};
     std::atomic<std::uint16_t> last_applied_cycle_{};
+    std::atomic<std::int32_t> last_apply_offset_microsecond_{};
     std::atomic<bool> has_last_applied_{false};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
@@ -122,3 +123,4 @@ private:
 
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
+static_assert(std::atomic<std::int32_t>::is_always_lock_free);

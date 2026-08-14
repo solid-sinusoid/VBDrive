@@ -79,7 +79,12 @@ void test_missing_and_duplicate_sync()
     sync.complete_apply(*applied, true);
     (void) require_status(sync);
     assert(sync.on_sync(12, 130) == SyncResult::Ignored);
-    assert(!sync.pop_status().has_value());
+    const auto duplicate_applied = require_status(sync);
+    assert(duplicate_applied.cycle_id == 12);
+    assert(duplicate_applied.status == StatusCode::Applied);
+    assert(duplicate_applied.reason == StatusReason::None);
+    assert(duplicate_applied.apply_offset_microsecond == 5);
+    assert(!sync.consume_armed(131).has_value());
 }
 
 void test_watchdog_holds_twice_then_disables()
