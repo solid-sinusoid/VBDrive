@@ -276,6 +276,10 @@ void test_unknown_phase_is_rejected()
     assert(sync.on_sync(8, static_cast<SyncPhase>(2U), 100) == SyncResult::Rejected);
     assert(require_status(sync).reason == StatusReason::OutOfRange);
     assert(sync.poll_watchdog(1000000) == WatchdogAction::None);
+
+    FocCycleSync immediate{SyncMode::Immediate};
+    assert(immediate.on_sync(9, static_cast<SyncPhase>(255U), 200) == SyncResult::Rejected);
+    assert(require_status(immediate).reason == StatusReason::OutOfRange);
 }
 
 }  // namespace

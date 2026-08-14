@@ -142,12 +142,12 @@ SyncResult FocCycleSync::on_sync(
     const SyncPhase phase,
     const std::uint64_t rx_us)
 {
-    if (mode_ != SyncMode::Synchronized) {
-        return SyncResult::Ignored;
-    }
     if ((phase != SyncPhase::Prepare) && (phase != SyncPhase::Run)) {
         push_main_status({cycle_id, StatusCode::Rejected, StatusReason::OutOfRange, 0});
         return SyncResult::Rejected;
+    }
+    if (mode_ != SyncMode::Synchronized) {
+        return SyncResult::Ignored;
     }
     if ((session_phase_ == SessionPhase::Run) && (phase == SyncPhase::Prepare)) {
         push_main_status({cycle_id, StatusCode::Rejected, StatusReason::OutOfRange, 0});
