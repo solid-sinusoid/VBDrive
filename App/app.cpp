@@ -758,16 +758,13 @@ public:
         if (transfer->metadata.remote_node_id != FOC_SYNC_MASTER_NODE_ID) {
             return;
         }
-        if (msg.phase > voltbro_foc_sync_2_0_PHASE_RUN) {
-            invalid_commands_counter += 1;
-            return;
-        }
         const auto phase = static_cast<SyncPhase>(msg.phase);
-        if (foc_cycle_sync.mode() == SyncMode::Immediate) {
-            foc_cycle_sync.immediate_marker(msg.cycle_id, transfer->timestamp_usec);
-        } else if (foc_cycle_sync.on_sync(msg.cycle_id, phase, transfer->timestamp_usec) ==
-                   SyncResult::Rejected) {
+        const auto result = foc_cycle_sync.on_sync(
+            msg.cycle_id, phase, transfer->timestamp_usec);
+        if (result == SyncResult::Rejected) {
             invalid_commands_counter += 1;
+        } else if (foc_cycle_sync.mode() == SyncMode::Immediate) {
+            foc_cycle_sync.immediate_marker(msg.cycle_id, transfer->timestamp_usec);
         }
     }
 };
