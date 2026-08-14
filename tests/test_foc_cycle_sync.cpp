@@ -85,6 +85,8 @@ void test_missing_and_duplicate_sync()
     assert(duplicate_applied.reason == StatusReason::None);
     assert(duplicate_applied.apply_offset_microsecond == 5);
     assert(!sync.consume_armed(131).has_value());
+    assert(sync.poll_watchdog(15119) == WatchdogAction::Hold);
+    assert(sync.poll_watchdog(15120) == WatchdogAction::Disable);
 }
 
 void test_watchdog_holds_twice_then_disables()
