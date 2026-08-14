@@ -14,7 +14,7 @@ FocCycleSync::FocCycleSync(
 {
 }
 
-void FocCycleSync::set_mode(const SyncMode mode)
+void FocCycleSync::reset_session()
 {
     armed_slot_.store(no_slot, std::memory_order_release);
     for (auto& slot : slots_) {
@@ -27,6 +27,11 @@ void FocCycleSync::set_mode(const SyncMode mode)
     watchdog_reported_ = false;
     main_status_head_ = 0;
     main_status_tail_ = 0;
+}
+
+void FocCycleSync::set_mode(const SyncMode mode)
+{
+    reset_session();
     mode_ = mode;
 }
 
@@ -89,10 +94,6 @@ StageResult FocCycleSync::stage(
         const auto last = last_applied_cycle_.load(std::memory_order_relaxed);
         if (!cycle_after(command.cycle_id, last)) {
             push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::Stale, 0});
-            return StageResult::Rejected;
-        }
-        if (static_cast<std::uint16_t>(command.cycle_id - last) > slots_.size()) {
-            push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::TooFarAhead, 0});
             return StageResult::Rejected;
         }
     }
