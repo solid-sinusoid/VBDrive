@@ -32,7 +32,7 @@
 #include <voltbro/foc/command_2_0.hpp>
 #include <voltbro/foc/command_status_1_0.hpp>
 #include <voltbro/foc/state_simple_1_0.hpp>
-#include <voltbro/foc/sync_1_0.hpp>
+#include <voltbro/foc/sync_2_0.hpp>
 
 #include <voltbro/eeprom/eeprom.hpp>
 #include <voltbro/encoders/ASxxxx/AS5047P.hpp>
@@ -489,7 +489,7 @@ void app() {
 //#pragma region Cyphal
 using FOCCommand = voltbro_foc_command_2_0;
 using FOCCommandStatus = voltbro_foc_command_status_1_0;
-using FOCSync = voltbro_foc_sync_1_0;
+using FOCSync = voltbro_foc_sync_2_0;
 using FOCState = voltbro_foc_state_simple_1_0;
 
 static constexpr CanardPortID FOC_COMMAND_PORT = 2107;
@@ -758,9 +758,15 @@ public:
         if (transfer->metadata.remote_node_id != FOC_SYNC_MASTER_NODE_ID) {
             return;
         }
+        if (msg.phase > voltbro_foc_sync_2_0_PHASE_RUN) {
+            invalid_commands_counter += 1;
+            return;
+        }
+        const auto phase = static_cast<SyncPhase>(msg.phase);
         if (foc_cycle_sync.mode() == SyncMode::Immediate) {
             foc_cycle_sync.immediate_marker(msg.cycle_id, transfer->timestamp_usec);
-        } else if (foc_cycle_sync.on_sync(msg.cycle_id, transfer->timestamp_usec) == SyncResult::Rejected) {
+        } else if (foc_cycle_sync.on_sync(msg.cycle_id, phase, transfer->timestamp_usec) ==
+                   SyncResult::Rejected) {
             invalid_commands_counter += 1;
         }
     }
@@ -961,7 +967,7 @@ void setup_subscriptions() {
                     (void) v_in;
                     response.persistent = false;
                     response._mutable = false;
-                    fill_register_natural32(v_out, 1U);
+                    fill_register_natural32(v_out, 2U);
                 }
             },
             {
