@@ -191,6 +191,7 @@ void test_reset_session_accepts_restarted_cycle_counter()
     sync.reset_session();
     assert(sync.stage(command(0), true, 200) == StageResult::Staged);
     assert(require_status(sync).status == StatusCode::Staged);
+    assert(sync.on_sync(0, SyncPhase::Prepare, 210) == SyncResult::Armed);
 }
 
 void test_prepare_without_matching_refreshes_only_prepared_node()
