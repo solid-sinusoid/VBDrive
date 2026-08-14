@@ -63,6 +63,7 @@ public:
         std::uint32_t control_period_us = 5000,
         std::uint32_t watchdog_us = 15000);
 
+    void reset_session();
     void set_mode(SyncMode mode);
     SyncMode mode() const { return mode_; }
     StageResult stage(const CycleCommand& command, bool target_valid, std::uint64_t rx_us);

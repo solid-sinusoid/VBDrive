@@ -554,12 +554,19 @@ static void persist_pending_config_if_needed() {
     HAL_IMPORTANT(get_eeprom().write<VBDriveConfig>(&config, CONFIG_PLACEMENT))
 }
 
+static void reset_foc_cycle_session() {
+    HAL_TIM_Base_Stop_IT(&htim4);
+    foc_cycle_sync.reset_session();
+    HAL_TIM_Base_Start_IT(&htim4);
+}
+
 static void stop_motor_if_requested() {
     if (!motor_stop_pending) {
         return;
     }
     motor_stop_pending = false;
     motor->set_state(false);
+    reset_foc_cycle_session();
 }
 
 static void reboot_to_bootloader_if_requested() {
@@ -626,6 +633,7 @@ void in_loop_reporting(millis current_t) {
         motor->set_foc_point(FOCTarget{0});
         motor->set_current_regulator_params(0.0f, 0.0f);
         motor->set_state(false);
+        reset_foc_cycle_session();
     }
 
     static CanardTransferID command_status_transfer_id = 0;

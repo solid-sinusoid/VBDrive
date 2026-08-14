@@ -150,6 +150,42 @@ void test_failed_hardware_apply_is_rejected()
     assert(status.reason == StatusReason::HardwareFault);
 }
 
+void test_idle_session_accepts_forward_cycle_gap()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(2), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.on_sync(2, 110) == SyncResult::Armed);
+    const auto applied = sync.consume_armed(111);
+    assert(applied.has_value());
+    sync.complete_apply(*applied, true);
+    (void) require_status(sync);
+
+    assert(sync.stage(command(20), true, 200) == StageResult::Staged);
+    const auto staged = require_status(sync);
+    assert(staged.status == StatusCode::Staged);
+    assert(staged.reason == StatusReason::None);
+}
+
+void test_reset_session_accepts_restarted_cycle_counter()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(20), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.on_sync(20, 110) == SyncResult::Armed);
+    const auto applied = sync.consume_armed(111);
+    assert(applied.has_value());
+    sync.complete_apply(*applied, true);
+    (void) require_status(sync);
+
+    assert(sync.stage(command(19), true, 120) == StageResult::Rejected);
+    assert(require_status(sync).reason == StatusReason::Stale);
+
+    sync.reset_session();
+    assert(sync.stage(command(0), true, 200) == StageResult::Staged);
+    assert(require_status(sync).status == StatusCode::Staged);
+}
+
 }  // namespace
 
 int main()
@@ -162,4 +198,6 @@ int main()
     test_invalid_target_is_rejected();
     test_staged_command_starts_watchdog_and_mode_change_clears_it();
     test_failed_hardware_apply_is_rejected();
+    test_idle_session_accepts_forward_cycle_gap();
+    test_reset_session_accepts_restarted_cycle_counter();
 }
