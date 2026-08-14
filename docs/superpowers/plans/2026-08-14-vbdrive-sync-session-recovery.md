@@ -13,7 +13,7 @@
 - Не добавлять новые Cyphal subscriptions и не изменять DSDL.
 - Не использовать динамическую память в runtime и ISR-пути.
 - Два теневых слота остаются жёстким пределом; третья команда возвращает `NO_FREE_SLOT`.
-- `reset_session()` вызывается только после выключения силовой части и не меняет `sync.mode`.
+- `reset_session()` вызывается только после выключения силовой части, внутри критической секции с остановленным TIM4 interrupt, и не меняет `sync.mode`.
 - Прошивка выполняется только из чистой проверенной release-ветки существующим fail-closed wrapper.
 - Моторы не активируются во время проверки прошивки.
 - Все коммиты создаются от имени `Ilya Uraev <ur.narmak@gmail.com>`.
@@ -172,9 +172,20 @@ ctest --test-dir build/host-tests --output-on-failure
 
 **Интерфейсы:**
 - Использует: `FocCycleSync::reset_session()`.
+- Создаёт: локальную `reset_foc_cycle_session()` для критической секции относительно TIM4 ISR.
 - Точки вызова: `stop_motor_if_requested()` после `motor->set_state(false)` и watchdog shutdown после выключения силовой части.
 
-- [ ] **Шаг 1: сбрасывать сессию после `state.is_on=false`**
+- [ ] **Шаг 1: добавить защищённый сброс сессии**
+
+```cpp
+static void reset_foc_cycle_session() {
+    HAL_TIM_Base_Stop_IT(&htim4);
+    foc_cycle_sync.reset_session();
+    HAL_TIM_Base_Start_IT(&htim4);
+}
+```
+
+- [ ] **Шаг 2: сбрасывать сессию после `state.is_on=false`**
 
 ```cpp
 static void stop_motor_if_requested() {
@@ -183,22 +194,22 @@ static void stop_motor_if_requested() {
     }
     motor_stop_pending = false;
     motor->set_state(false);
-    foc_cycle_sync.reset_session();
+    reset_foc_cycle_session();
 }
 ```
 
-- [ ] **Шаг 2: сбрасывать сессию после watchdog shutdown**
+- [ ] **Шаг 3: сбрасывать сессию после watchdog shutdown**
 
 ```cpp
 if (foc_cycle_sync.poll_watchdog(micros_64()) == WatchdogAction::Disable) {
     motor->set_foc_point(FOCTarget{0});
     motor->set_current_regulator_params(0.0f, 0.0f);
     motor->set_state(false);
-    foc_cycle_sync.reset_session();
+    reset_foc_cycle_session();
 }
 ```
 
-- [ ] **Шаг 3: проверить host-тесты без sanitizer-кэша**
+- [ ] **Шаг 4: проверить host-тесты без sanitizer-кэша**
 
 ```bash
 cmake -S tests -B build/host-tests-release -DCMAKE_BUILD_TYPE=Release
@@ -208,7 +219,7 @@ ctest --test-dir build/host-tests-release --output-on-failure
 
 Ожидается `2/2` теста.
 
-- [ ] **Шаг 4: закоммитить firmware-исправление**
+- [ ] **Шаг 5: закоммитить firmware-исправление**
 
 ```bash
 git add App/app.cpp App/foc_cycle_sync.cpp App/foc_cycle_sync.hpp tests/test_foc_cycle_sync.cpp
