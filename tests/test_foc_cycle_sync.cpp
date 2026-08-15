@@ -89,6 +89,29 @@ void test_missing_and_duplicate_sync()
     assert(sync.poll_watchdog(15120) == WatchdogAction::Disable);
 }
 
+void test_duplicate_command_is_idempotent_before_sync()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(12), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+
+    assert(sync.stage(command(12), true, 101) == StageResult::Staged);
+    const auto duplicate = require_status(sync);
+    assert(duplicate.cycle_id == 12);
+    assert(duplicate.status == StatusCode::Staged);
+    assert(duplicate.reason == StatusReason::None);
+
+    assert(sync.on_sync(12, SyncPhase::Run, 110) == SyncResult::Armed);
+    const auto applied = sync.consume_armed(120);
+    assert(applied.has_value());
+    sync.complete_apply(*applied, true);
+    (void) require_status(sync);
+    assert(!sync.consume_armed(121).has_value());
+
+    assert(sync.stage(command(13), true, 130) == StageResult::Staged);
+    assert(require_status(sync).cycle_id == 13);
+}
+
 void test_watchdog_holds_twice_then_disables()
 {
     FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
@@ -289,6 +312,7 @@ int main()
     test_staged_sync_applied_once();
     test_rollover_and_slot_capacity();
     test_missing_and_duplicate_sync();
+    test_duplicate_command_is_idempotent_before_sync();
     test_watchdog_holds_twice_then_disables();
     test_immediate_mode_reports_negative_offset();
     test_invalid_target_is_rejected();

@@ -716,7 +716,11 @@ void in_loop_reporting(millis current_t) {
 
 class FOCCommandSub: public AbstractSubscription<FOCCommand> {
 public:
-    FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCCommand>(interface, port_id) {};
+    FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCCommand>(interface, port_id) {
+        // FOC command replay is guarded by cycle_id in FocCycleSync. Do not let
+        // a stale libcanard RX transfer session suppress the next control tick.
+        sub.transfer_id_timeout_usec = 0U;
+    };
     void handler(const FOCCommand& msg, CanardRxTransfer* transfer) override {
         const FocCycleTarget target{
             .torque = msg._torque.newton_meter,
