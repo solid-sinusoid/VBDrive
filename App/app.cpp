@@ -757,7 +757,11 @@ public:
 
 class FOCSyncSub: public AbstractSubscription<FOCSync> {
 public:
-    FOCSyncSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCSync>(interface, port_id) {};
+    FOCSyncSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<FOCSync>(interface, port_id) {
+        // FocCycleSync makes repeated PREPARE/RUN markers idempotent by cycle_id.
+        // Accept every marker instead of depending on a stale transport session.
+        sub.transfer_id_timeout_usec = 0U;
+    };
     void handler(const FOCSync& msg, CanardRxTransfer* transfer) override {
         if (transfer->metadata.remote_node_id != FOC_SYNC_MASTER_NODE_ID) {
             return;
