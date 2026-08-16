@@ -27,6 +27,7 @@ void FocCycleSync::reset_session()
         static_cast<std::uint8_t>(SyncPhase::Run),
         std::memory_order_relaxed);
     has_last_applied_.store(false, std::memory_order_release);
+    has_applying_cycle_.store(false, std::memory_order_release);
     has_last_sync_ = false;
     watchdog_reported_ = false;
     session_phase_ = SessionPhase::Idle;
@@ -203,6 +204,18 @@ SyncResult FocCycleSync::on_sync(
         }
         return SyncResult::Ignored;
     }
+    // consume_armed() clears the slot before the FOC ISR completes the output.
+    // A repeated RUN marker in this interval belongs to that in-flight apply;
+    // treating it as unmatched races the ISR and produces a false rejection.
+    if (has_applying_cycle_.load(std::memory_order_acquire) &&
+        (applying_cycle_.load(std::memory_order_relaxed) == cycle_id) &&
+        (applying_phase_.load(std::memory_order_relaxed) ==
+         static_cast<std::uint8_t>(phase))) {
+        last_sync_us_ = rx_us;
+        has_last_sync_ = true;
+        watchdog_reported_ = false;
+        return SyncResult::Ignored;
+    }
 
     push_main_status({cycle_id, StatusCode::Rejected, StatusReason::NoMatchingCommand, 0});
     return SyncResult::Rejected;
@@ -239,6 +252,9 @@ std::optional<AppliedCycle> FocCycleSync::consume_armed(const std::uint64_t appl
     const auto command = slot.command;
     const auto offset = saturated_offset(apply_us, slot.marker_us);
     slot.state.store(SlotState::Empty, std::memory_order_release);
+    applying_cycle_.store(command.cycle_id, std::memory_order_relaxed);
+    applying_phase_.store(static_cast<std::uint8_t>(slot.phase), std::memory_order_relaxed);
+    has_applying_cycle_.store(true, std::memory_order_release);
     return AppliedCycle{command, slot.phase, offset, apply_us};
 }
 
@@ -250,6 +266,7 @@ void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accept
             StatusCode::Rejected,
             StatusReason::HardwareFault,
             applied.apply_offset_microsecond});
+        has_applying_cycle_.store(false, std::memory_order_release);
         return;
     }
     last_apply_offset_microsecond_.store(
@@ -260,6 +277,7 @@ void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accept
         static_cast<std::uint8_t>(applied.phase),
         std::memory_order_relaxed);
     has_last_applied_.store(true, std::memory_order_release);
+    has_applying_cycle_.store(false, std::memory_order_release);
     if (mode_ == SyncMode::Synchronized) {
         publish_applied_from_isr(
             {applied.command.cycle_id,
