@@ -75,6 +75,10 @@ public:
     bool immediate_marker(std::uint16_t cycle_id, std::uint64_t marker_us);
     WatchdogAction poll_watchdog(std::uint64_t now_us);
     std::optional<CommandStatus> pop_status();
+    // Four 8-bit counters: RUN armed, consumed by the FOC ISR, completed,
+    // and rejected. They deliberately survive reset_session() so they retain
+    // the cause of a failed host activation after the motor has been disabled.
+    std::uint32_t run_progress() const;
 
 private:
     enum class SlotState : std::uint8_t { Empty, Writing, Staged, Armed };
@@ -121,6 +125,10 @@ private:
     std::atomic<std::uint16_t> applying_cycle_{};
     std::atomic<std::uint8_t> applying_phase_{};
     std::atomic<bool> has_applying_cycle_{false};
+    std::atomic<std::uint8_t> run_armed_count_{};
+    std::atomic<std::uint8_t> run_consumed_count_{};
+    std::atomic<std::uint8_t> run_completed_count_{};
+    std::atomic<std::uint8_t> run_rejected_count_{};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
