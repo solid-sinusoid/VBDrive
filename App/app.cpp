@@ -496,6 +496,9 @@ static constexpr CanardPortID FOC_COMMAND_PORT = 2107;
 static constexpr CanardPortID FOC_SYNC_PORT = 3809;
 static constexpr CanardPortID FOC_COMMAND_STATUS_PORT = 3810;
 static constexpr CanardPortID FOC_STATE_PORT = 3811;
+// APPLIED closes the distributed FOC barrier. It must not be delayed behind
+// another node's repeated status or regular state telemetry on a busy bus.
+static constexpr CanardPriority FOC_COMMAND_STATUS_PRIORITY = CanardPriorityImmediate;
 // Six drives share one CAN FD bus. At 1 kHz per drive, state telemetry
 // starves lower-priority node IDs once ros2_control commands are added.
 // 200 Hz per drive stays above the 150 Hz ROS control rate with ample
@@ -650,7 +653,9 @@ void in_loop_reporting(millis current_t) {
         get_interface()->send_msg(
             &status_msg,
             FOC_COMMAND_STATUS_PORT,
-            &command_status_transfer_id);
+            &command_status_transfer_id,
+            DEFAULT_TIMEOUT_MICROS,
+            FOC_COMMAND_STATUS_PRIORITY);
     }
 
     static millis report_time = 0;
