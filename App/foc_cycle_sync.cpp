@@ -157,6 +157,11 @@ SyncResult FocCycleSync::on_sync(
         (last_applied_cycle_.load(std::memory_order_relaxed) == cycle_id) &&
         (last_applied_phase_.load(std::memory_order_relaxed) ==
          static_cast<std::uint8_t>(phase))) {
+        // The master repeats idempotent RUN markers until it receives APPLIED.
+        // Keep the watchdog alive while a delayed main loop publishes it.
+        last_sync_us_ = rx_us;
+        has_last_sync_ = true;
+        watchdog_reported_ = false;
         push_main_status({
             cycle_id,
             StatusCode::Applied,

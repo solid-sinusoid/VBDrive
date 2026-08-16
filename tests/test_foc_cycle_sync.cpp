@@ -85,8 +85,10 @@ void test_missing_and_duplicate_sync()
     assert(duplicate_applied.reason == StatusReason::None);
     assert(duplicate_applied.apply_offset_microsecond == 5);
     assert(!sync.consume_armed(131).has_value());
-    assert(sync.poll_watchdog(15119) == WatchdogAction::Hold);
-    assert(sync.poll_watchdog(15120) == WatchdogAction::Disable);
+    // A repeated RUN marker is an idempotent acknowledgement probe.  It must
+    // also keep the RUN watchdog alive while the main loop publishes APPLIED.
+    assert(sync.poll_watchdog(15129) == WatchdogAction::Hold);
+    assert(sync.poll_watchdog(15130) == WatchdogAction::Disable);
 }
 
 void test_duplicate_command_is_idempotent_before_sync()
