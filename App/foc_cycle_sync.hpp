@@ -118,6 +118,9 @@ private:
     std::atomic<std::uint8_t> last_applied_phase_{};
     std::atomic<std::int32_t> last_apply_offset_microsecond_{};
     std::atomic<bool> has_last_applied_{false};
+    std::atomic<std::uint16_t> applying_cycle_{};
+    std::atomic<std::uint8_t> applying_phase_{};
+    std::atomic<bool> has_applying_cycle_{false};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
