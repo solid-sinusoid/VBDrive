@@ -151,6 +151,26 @@ void test_duplicate_run_sync_is_idempotent_while_apply_is_in_progress()
     assert(status.status == StatusCode::Applied);
 }
 
+void test_run_progress_survives_session_reset()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.run_progress() == 0U);
+
+    assert(sync.stage(command(16), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.on_sync(16, SyncPhase::Run, 110) == SyncResult::Armed);
+    const auto applied = sync.consume_armed(120);
+    assert(applied.has_value());
+    sync.complete_apply(*applied, true);
+    (void) require_status(sync);
+
+    // Counters are intentionally retained after a watchdog/deactivation reset
+    // so a host can inspect the last failed synchronized bring-up.
+    assert(sync.run_progress() == 0x00010101U);
+    sync.reset_session();
+    assert(sync.run_progress() == 0x00010101U);
+}
+
 void test_watchdog_holds_twice_then_disables()
 {
     FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
@@ -354,6 +374,7 @@ int main()
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();
     test_duplicate_run_sync_is_idempotent_while_apply_is_in_progress();
+    test_run_progress_survives_session_reset();
     test_watchdog_holds_twice_then_disables();
     test_immediate_mode_reports_negative_offset();
     test_invalid_target_is_rejected();

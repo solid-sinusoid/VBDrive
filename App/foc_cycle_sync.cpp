@@ -190,6 +190,9 @@ SyncResult FocCycleSync::on_sync(
         armed_slot_.store(index, std::memory_order_release);
         session_phase_ =
             (phase == SyncPhase::Run) ? SessionPhase::Run : SessionPhase::Prepare;
+        if (phase == SyncPhase::Run) {
+            run_armed_count_.fetch_add(1U, std::memory_order_relaxed);
+        }
         last_sync_us_ = rx_us;
         has_last_sync_ = true;
         watchdog_reported_ = false;
@@ -217,6 +220,7 @@ SyncResult FocCycleSync::on_sync(
         return SyncResult::Ignored;
     }
 
+    run_rejected_count_.fetch_add(1U, std::memory_order_relaxed);
     push_main_status({cycle_id, StatusCode::Rejected, StatusReason::NoMatchingCommand, 0});
     return SyncResult::Rejected;
 }
@@ -250,17 +254,24 @@ std::optional<AppliedCycle> FocCycleSync::consume_armed(const std::uint64_t appl
         return std::nullopt;
     }
     const auto command = slot.command;
+    const auto phase = slot.phase;
     const auto offset = saturated_offset(apply_us, slot.marker_us);
     slot.state.store(SlotState::Empty, std::memory_order_release);
     applying_cycle_.store(command.cycle_id, std::memory_order_relaxed);
-    applying_phase_.store(static_cast<std::uint8_t>(slot.phase), std::memory_order_relaxed);
+    applying_phase_.store(static_cast<std::uint8_t>(phase), std::memory_order_relaxed);
     has_applying_cycle_.store(true, std::memory_order_release);
-    return AppliedCycle{command, slot.phase, offset, apply_us};
+    if (phase == SyncPhase::Run) {
+        run_consumed_count_.fetch_add(1U, std::memory_order_relaxed);
+    }
+    return AppliedCycle{command, phase, offset, apply_us};
 }
 
 void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accepted)
 {
     if (!accepted) {
+        if (applied.phase == SyncPhase::Run) {
+            run_rejected_count_.fetch_add(1U, std::memory_order_relaxed);
+        }
         publish_applied_from_isr({
             applied.command.cycle_id,
             StatusCode::Rejected,
@@ -278,6 +289,9 @@ void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accept
         std::memory_order_relaxed);
     has_last_applied_.store(true, std::memory_order_release);
     has_applying_cycle_.store(false, std::memory_order_release);
+    if (applied.phase == SyncPhase::Run) {
+        run_completed_count_.fetch_add(1U, std::memory_order_relaxed);
+    }
     if (mode_ == SyncMode::Synchronized) {
         publish_applied_from_isr(
             {applied.command.cycle_id,
@@ -344,4 +358,12 @@ std::optional<CommandStatus> FocCycleSync::pop_status()
     const auto status = applied_mailbox_.status;
     applied_mailbox_.valid.store(false, std::memory_order_release);
     return status;
+}
+
+std::uint32_t FocCycleSync::run_progress() const
+{
+    return static_cast<std::uint32_t>(run_armed_count_.load(std::memory_order_relaxed)) |
+           (static_cast<std::uint32_t>(run_consumed_count_.load(std::memory_order_relaxed)) << 8U) |
+           (static_cast<std::uint32_t>(run_completed_count_.load(std::memory_order_relaxed)) << 16U) |
+           (static_cast<std::uint32_t>(run_rejected_count_.load(std::memory_order_relaxed)) << 24U);
 }
