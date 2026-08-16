@@ -167,8 +167,14 @@ void test_run_progress_survives_session_reset()
     // Counters are intentionally retained after a watchdog/deactivation reset
     // so a host can inspect the last failed synchronized bring-up.
     assert(sync.run_progress() == 0x00010101U);
+    assert(sync.run_status_progress() == 0x0100U);
+    assert(sync.on_sync(16, SyncPhase::Run, 121) == SyncResult::Ignored);
+    const auto duplicate = require_status(sync);
+    assert(duplicate.status == StatusCode::Applied);
+    assert(sync.run_status_progress() == 0x0201U);
     sync.reset_session();
     assert(sync.run_progress() == 0x00010101U);
+    assert(sync.run_status_progress() == 0x0201U);
 }
 
 void test_watchdog_holds_twice_then_disables()

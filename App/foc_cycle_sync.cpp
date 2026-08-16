@@ -163,6 +163,9 @@ SyncResult FocCycleSync::on_sync(
         last_sync_us_ = rx_us;
         has_last_sync_ = true;
         watchdog_reported_ = false;
+        if (phase == SyncPhase::Run) {
+            run_repeat_sync_count_.fetch_add(1U, std::memory_order_relaxed);
+        }
         push_main_status({
             cycle_id,
             StatusCode::Applied,
@@ -350,6 +353,13 @@ std::optional<CommandStatus> FocCycleSync::pop_status()
     if (main_status_tail_ != main_status_head_) {
         const auto status = main_statuses_[main_status_tail_];
         main_status_tail_ = static_cast<std::uint8_t>((main_status_tail_ + 1U) % status_capacity);
+        if ((status.status == StatusCode::Applied) &&
+            has_last_applied_.load(std::memory_order_acquire) &&
+            (status.cycle_id == last_applied_cycle_.load(std::memory_order_relaxed)) &&
+            (last_applied_phase_.load(std::memory_order_relaxed) ==
+             static_cast<std::uint8_t>(SyncPhase::Run))) {
+            run_applied_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+        }
         return status;
     }
     if (!applied_mailbox_.valid.load(std::memory_order_acquire)) {
@@ -357,6 +367,13 @@ std::optional<CommandStatus> FocCycleSync::pop_status()
     }
     const auto status = applied_mailbox_.status;
     applied_mailbox_.valid.store(false, std::memory_order_release);
+    if ((status.status == StatusCode::Applied) &&
+        has_last_applied_.load(std::memory_order_acquire) &&
+        (status.cycle_id == last_applied_cycle_.load(std::memory_order_relaxed)) &&
+        (last_applied_phase_.load(std::memory_order_relaxed) ==
+         static_cast<std::uint8_t>(SyncPhase::Run))) {
+        run_applied_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+    }
     return status;
 }
 
@@ -366,4 +383,11 @@ std::uint32_t FocCycleSync::run_progress() const
            (static_cast<std::uint32_t>(run_consumed_count_.load(std::memory_order_relaxed)) << 8U) |
            (static_cast<std::uint32_t>(run_completed_count_.load(std::memory_order_relaxed)) << 16U) |
            (static_cast<std::uint32_t>(run_rejected_count_.load(std::memory_order_relaxed)) << 24U);
+}
+
+std::uint16_t FocCycleSync::run_status_progress() const
+{
+    return static_cast<std::uint16_t>(run_repeat_sync_count_.load(std::memory_order_relaxed)) |
+           (static_cast<std::uint16_t>(
+             run_applied_status_pop_count_.load(std::memory_order_relaxed)) << 8U);
 }
