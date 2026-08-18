@@ -131,6 +131,20 @@ void test_duplicate_run_sync_is_idempotent_before_apply()
     assert(!sync.consume_armed(121).has_value());
 }
 
+void test_duplicate_run_sync_keeps_watchdog_alive_while_armed()
+{
+    FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
+    assert(sync.stage(command(145), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.on_sync(145, SyncPhase::Run, 110) == SyncResult::Armed);
+
+    // На реальном приводе FOC ISR может задержать consume_armed(). Повторный
+    // RUN должен продлить watchdog и не сбросить ещё ARMED-команду.
+    assert(sync.on_sync(145, SyncPhase::Run, 10000) == SyncResult::Ignored);
+    assert(sync.poll_watchdog(20000) == WatchdogAction::Hold);
+    assert(sync.consume_armed(20001).has_value());
+}
+
 void test_duplicate_run_sync_is_idempotent_while_apply_is_in_progress()
 {
     FocCycleSync sync{SyncMode::Synchronized};
@@ -379,6 +393,7 @@ int main()
     test_missing_and_duplicate_sync();
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();
+    test_duplicate_run_sync_keeps_watchdog_alive_while_armed();
     test_duplicate_run_sync_is_idempotent_while_apply_is_in_progress();
     test_run_progress_survives_session_reset();
     test_watchdog_holds_twice_then_disables();
