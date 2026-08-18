@@ -133,11 +133,11 @@ void configure_fdcan(FDCAN_HandleTypeDef* hfdcan) {
     hfdcan->Init.DataTimeSeg2 = 4;
     hfdcan->Init.StdFiltersNbr = 0;
     hfdcan->Init.ExtFiltersNbr = 4;
-    // FOC APPLIED acknowledgements must overtake pending state telemetry.
-    // TX Queue selects the pending frame with the lowest CAN identifier,
-    // whereas TX FIFO would preserve insertion order and can head-of-line
-    // block a high-priority synchronized-control status behind telemetry.
-    hfdcan->Init.TxFifoQueueMode = FDCAN_TX_QUEUE_OPERATION;
+    // STM32G431's FDCAN Queue mode can report no free TX slots even on an
+    // empty bus.  FIFO mode exposes all three hardware slots reliably.
+    // The application publishes synchronized-command status before regular
+    // telemetry; the host retries idempotent RUN markers until APPLIED.
+    hfdcan->Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
 
     hfdcan->Init.NominalPrescaler = drive_state_controller.get_nom_prescaler();
     hfdcan->Init.DataPrescaler = drive_state_controller.get_data_prescaler();
