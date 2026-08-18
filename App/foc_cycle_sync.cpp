@@ -174,6 +174,13 @@ SyncResult FocCycleSync::on_sync(
         return SyncResult::Ignored;
     }
     if (find_slot(cycle_id, SlotState::Armed) != nullptr) {
+        // FOC ISR may not consume an already armed command before the next
+        // CAN heartbeat.  The repeated marker is still proof that the master
+        // is alive, so it must refresh the watchdog without reporting an
+        // APPLIED result prematurely.
+        last_sync_us_ = rx_us;
+        has_last_sync_ = true;
+        watchdog_reported_ = false;
         return SyncResult::Ignored;
     }
 
