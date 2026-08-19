@@ -23,6 +23,7 @@ void FocCycleSync::reset_session()
     applied_mailbox_.valid.store(false, std::memory_order_release);
     staged_retry_mailbox_.valid.store(false, std::memory_order_release);
     immediate_apply_.valid.store(false, std::memory_order_release);
+    deferred_sync_.valid = false;
     last_apply_offset_microsecond_.store(0, std::memory_order_relaxed);
     last_applied_phase_.store(
         static_cast<std::uint8_t>(SyncPhase::Run),
@@ -149,6 +150,35 @@ StageResult FocCycleSync::stage(
         slot.state.store(SlotState::Staged, std::memory_order_release);
         command_staged_count_.fetch_add(1U, std::memory_order_relaxed);
         push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
+
+        // The host emits COMMAND and RUN separately.  If RUN was received
+        // first, do not require another marker: only this exact cycle can be
+        // armed, and only while the marker is still within its watchdog.
+        if ((mode_ == SyncMode::Synchronized) && deferred_sync_.valid &&
+            (deferred_sync_.cycle_id == command.cycle_id) &&
+            (deferred_sync_.phase == SyncPhase::Run) &&
+            (rx_us >= deferred_sync_.marker_us) &&
+            ((rx_us - deferred_sync_.marker_us) < watchdog_us_) &&
+            (armed_slot_.load(std::memory_order_acquire) == no_slot)) {
+            slot.marker_us = deferred_sync_.marker_us;
+            slot.phase = deferred_sync_.phase;
+            slot.state.store(SlotState::Armed, std::memory_order_release);
+            armed_slot_.store(index, std::memory_order_release);
+            session_phase_ = SessionPhase::Run;
+            last_sync_us_ = deferred_sync_.marker_us;
+            has_last_sync_ = true;
+            watchdog_reported_ = false;
+            run_armed_count_.fetch_add(1U, std::memory_order_relaxed);
+            deferred_sync_.valid = false;
+            return StageResult::Staged;
+        }
+        if (deferred_sync_.valid &&
+            ((deferred_sync_.cycle_id == command.cycle_id) ||
+             cycle_after(command.cycle_id, deferred_sync_.cycle_id) ||
+             (rx_us < deferred_sync_.marker_us) ||
+             ((rx_us - deferred_sync_.marker_us) >= watchdog_us_))) {
+            deferred_sync_.valid = false;
+        }
         if (mode_ == SyncMode::Immediate) {
             slot.state.store(SlotState::Armed, std::memory_order_release);
             armed_slot_.store(index, std::memory_order_release);
@@ -256,9 +286,21 @@ SyncResult FocCycleSync::on_sync(
         return SyncResult::Ignored;
     }
 
-    run_rejected_count_.fetch_add(1U, std::memory_order_relaxed);
-    push_main_status({cycle_id, StatusCode::Rejected, StatusReason::NoMatchingCommand, 0});
-    return SyncResult::Rejected;
+    // COMMAND and RUN can land in different FDCAN FIFOs.  Keep one current
+    // RUN marker so a command dequeued just afterwards can arm safely.  The
+    // marker never applies an arbitrary or stale command: stage() checks the
+    // exact cycle ID and the normal watchdog window before arming it.
+    deferred_sync_ = DeferredSync{
+        .valid = true,
+        .cycle_id = cycle_id,
+        .phase = SyncPhase::Run,
+        .marker_us = rx_us,
+    };
+    session_phase_ = SessionPhase::Run;
+    last_sync_us_ = rx_us;
+    has_last_sync_ = true;
+    watchdog_reported_ = false;
+    return SyncResult::Ignored;
 }
 
 std::int32_t FocCycleSync::saturated_offset(

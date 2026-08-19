@@ -68,12 +68,18 @@ void test_rollover_and_slot_capacity()
 void test_missing_and_duplicate_sync()
 {
     FocCycleSync sync{SyncMode::Synchronized};
-    assert(sync.on_sync(12, SyncPhase::Run, 100) == SyncResult::Rejected);
-    assert(require_status(sync).reason == StatusReason::NoMatchingCommand);
+    // On a loaded CAN bus the RUN marker can leave FIFO1 before its matching
+    // command. It must not be rejected: the marker is deferred until exactly
+    // that command arrives, and cannot apply any other command.
+    assert(sync.on_sync(12, SyncPhase::Run, 100) == SyncResult::Ignored);
+    assert(!sync.pop_status().has_value());
 
     assert(sync.stage(command(12), true, 110) == StageResult::Staged);
-    (void) require_status(sync);
-    assert(sync.on_sync(12, SyncPhase::Run, 120) == SyncResult::Armed);
+    const auto staged = require_status(sync);
+    assert(staged.status == StatusCode::Staged);
+    assert(staged.cycle_id == 12);
+    // The deferred RUN has armed only this matching cycle, without waiting
+    // for a second marker.
     const auto applied = sync.consume_armed(125);
     assert(applied.has_value());
     sync.complete_apply(*applied, true);
@@ -85,12 +91,28 @@ void test_missing_and_duplicate_sync()
     assert(duplicate_applied.cycle_id == 12);
     assert(duplicate_applied.status == StatusCode::Applied);
     assert(duplicate_applied.reason == StatusReason::None);
-    assert(duplicate_applied.apply_offset_microsecond == 5);
+    assert(duplicate_applied.apply_offset_microsecond == 25);
     assert(!sync.consume_armed(131).has_value());
     // A repeated RUN marker is an idempotent acknowledgement probe.  It must
     // also keep the RUN watchdog alive while the main loop publishes APPLIED.
     assert(sync.poll_watchdog(50129) == WatchdogAction::Hold);
     assert(sync.poll_watchdog(50130) == WatchdogAction::Disable);
+}
+
+void test_deferred_run_never_arms_different_or_superseded_cycle()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.on_sync(80, SyncPhase::Run, 100) == SyncResult::Ignored);
+
+    // A later command proves cycle 80 was superseded; the deferred RUN must
+    // not arm it or any other cycle.
+    assert(sync.stage(command(81), true, 110) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(!sync.consume_armed(111).has_value());
+
+    assert(sync.stage(command(80), true, 120) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(!sync.consume_armed(121).has_value());
 }
 
 void test_repeated_applied_run_does_not_starve_next_staged()
@@ -292,7 +314,7 @@ void test_main_status_queue_overflow_retains_drop_diagnostic()
     // erase the evidence needed to diagnose a delayed acknowledgement on a
     // physical drive.
     for (std::uint16_t cycle_id = 1U; cycle_id <= 8U; ++cycle_id) {
-        assert(sync.on_sync(cycle_id, SyncPhase::Run, cycle_id) == SyncResult::Rejected);
+        assert(sync.stage(command(cycle_id), false, cycle_id) == StageResult::Rejected);
     }
 
     assert(sync.status_queue_progress() == 0x00080001U);
@@ -463,6 +485,7 @@ int main()
     test_staged_sync_applied_once();
     test_rollover_and_slot_capacity();
     test_missing_and_duplicate_sync();
+    test_deferred_run_never_arms_different_or_superseded_cycle();
     test_repeated_applied_run_does_not_starve_next_staged();
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();

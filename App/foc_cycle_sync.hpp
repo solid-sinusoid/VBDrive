@@ -110,6 +110,16 @@ private:
         std::atomic<bool> valid{false};
     };
 
+    // FOC command and RUN are sent as separate CAN frames.  A matching RUN
+    // marker may be received first when the bus is busy; retain one such
+    // marker and arm only the command with the same cycle ID when it arrives.
+    struct DeferredSync {
+        bool valid{false};
+        std::uint16_t cycle_id{};
+        SyncPhase phase{SyncPhase::Run};
+        std::uint64_t marker_us{};
+    };
+
     static constexpr std::uint8_t no_slot = std::numeric_limits<std::uint8_t>::max();
     static constexpr std::size_t status_capacity = 8;
     static constexpr std::uint32_t prepare_watchdog_us = 250000U;
@@ -158,6 +168,7 @@ private:
     StatusMailbox applied_mailbox_{};
     StatusMailbox staged_retry_mailbox_{};
     ImmediateApplyMailbox immediate_apply_{};
+    DeferredSync deferred_sync_{};
 };
 
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
