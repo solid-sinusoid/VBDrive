@@ -79,6 +79,8 @@ void test_missing_and_duplicate_sync()
     sync.complete_apply(*applied, true);
     (void) require_status(sync);
     assert(sync.on_sync(12, SyncPhase::Run, 130) == SyncResult::Ignored);
+    // Повторный RUN запрашивает повтор APPLIED через отдельный mailbox, не
+    // занимая FIFO, предназначенный для STAGED/REJECTED.
     const auto duplicate_applied = require_status(sync);
     assert(duplicate_applied.cycle_id == 12);
     assert(duplicate_applied.status == StatusCode::Applied);
@@ -89,6 +91,32 @@ void test_missing_and_duplicate_sync()
     // also keep the RUN watchdog alive while the main loop publishes APPLIED.
     assert(sync.poll_watchdog(15129) == WatchdogAction::Hold);
     assert(sync.poll_watchdog(15130) == WatchdogAction::Disable);
+}
+
+void test_repeated_applied_run_does_not_starve_next_staged()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(71), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.on_sync(71, SyncPhase::Run, 110) == SyncResult::Armed);
+    const auto applied = sync.consume_armed(120);
+    assert(applied.has_value());
+    sync.complete_apply(*applied, true);
+
+    // Хост повторяет RUN, пока ждёт подтверждение. Очередь на 7 записей не
+    // должна быть заполнена дубликатами APPLIED и вытеснить новый STAGED.
+    for (std::uint64_t timestamp = 130; timestamp < 230; timestamp += 5) {
+        assert(sync.on_sync(71, SyncPhase::Run, timestamp) == SyncResult::Ignored);
+    }
+    assert(sync.stage(command(72), true, 230) == StageResult::Staged);
+
+    const auto staged = require_status(sync);
+    assert(staged.cycle_id == 72);
+    assert(staged.status == StatusCode::Staged);
+    const auto applied_status = require_status(sync);
+    assert(applied_status.cycle_id == 71);
+    assert(applied_status.status == StatusCode::Applied);
+    assert(!sync.pop_status().has_value());
 }
 
 void test_duplicate_command_is_idempotent_before_sync()
@@ -391,6 +419,7 @@ int main()
     test_staged_sync_applied_once();
     test_rollover_and_slot_capacity();
     test_missing_and_duplicate_sync();
+    test_repeated_applied_run_does_not_starve_next_staged();
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();
     test_duplicate_run_sync_keeps_watchdog_alive_while_armed();
