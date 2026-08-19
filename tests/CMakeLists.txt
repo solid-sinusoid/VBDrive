@@ -19,3 +19,11 @@ target_compile_features(test_monotonic_micros PRIVATE cxx_std_20)
 target_compile_options(test_monotonic_micros PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_test(NAME monotonic_micros COMMAND test_monotonic_micros)
+
+add_executable(test_disable_diagnostics
+    test_disable_diagnostics.cpp
+)
+target_compile_features(test_disable_diagnostics PRIVATE cxx_std_20)
+target_compile_options(test_disable_diagnostics PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_test(NAME disable_diagnostics COMMAND test_disable_diagnostics)

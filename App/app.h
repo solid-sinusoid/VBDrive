@@ -9,6 +9,7 @@
 
 #include "state_manager.hpp"
 #include "foc_cycle_sync.hpp"
+#include "disable_diagnostics.hpp"
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
@@ -46,6 +47,7 @@ VBDrive* get_motor();
 EEPROM& get_eeprom();
 std::optional<AppliedCycle> consume_foc_cycle_command(micros apply_us);
 void foc_cycle_sync_complete_apply(const AppliedCycle& applied, bool accepted);
+void record_motor_disable(MotorDisableReason reason);
 // actions (in app.cpp)
 bool is_able_to_calibrate();
 bool do_calibrate();

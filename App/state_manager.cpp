@@ -29,6 +29,7 @@ DriveStateController drive_state_controller(
     []() {
         auto motor = get_motor();
         if (motor) {
+            record_motor_disable(MotorDisableReason::StateManagerStop);
             motor->stop();
         }
     },
