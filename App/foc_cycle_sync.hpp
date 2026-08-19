@@ -63,7 +63,7 @@ public:
     explicit FocCycleSync(
         SyncMode mode,
         std::uint32_t control_period_us = 5000,
-        std::uint32_t watchdog_us = 15000);
+        std::uint32_t watchdog_us = 50000);
 
     void reset_session();
     void set_mode(SyncMode mode);
