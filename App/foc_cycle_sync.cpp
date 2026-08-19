@@ -92,7 +92,12 @@ StageResult FocCycleSync::stage(
     const std::uint64_t rx_us)
 {
     command_received_count_.fetch_add(1U, std::memory_order_relaxed);
-    last_command_cycle_.store(command.cycle_id, std::memory_order_relaxed);
+    // The host emits cycle zero while fail-closed releasing motor torque.
+    // Preserve the prior non-zero cycle so a post-failure diagnostic still
+    // identifies the command that should have matched the rejected RUN marker.
+    if (command.cycle_id != 0U) {
+        last_command_cycle_.store(command.cycle_id, std::memory_order_relaxed);
+    }
 
     if (!target_valid) {
         push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::InvalidNumber, 0});
