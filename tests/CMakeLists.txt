@@ -35,3 +35,11 @@ target_compile_features(test_fdcan_tx_policy PRIVATE cxx_std_20)
 target_compile_options(test_fdcan_tx_policy PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_test(NAME fdcan_tx_policy COMMAND test_fdcan_tx_policy)
+
+add_executable(test_fdcan_rx_priority
+    test_fdcan_rx_priority.cpp
+)
+target_compile_features(test_fdcan_rx_priority PRIVATE cxx_std_20)
+target_compile_options(test_fdcan_rx_priority PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_test(NAME fdcan_rx_priority COMMAND test_fdcan_rx_priority)
