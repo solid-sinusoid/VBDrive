@@ -821,7 +821,7 @@ public:
 
 // NOTE: underlying CanardRxSubscriptions are HUGE - 552 bytes each. C++ wrapper size is negligible in comparison
 ReservedObject<NodeInfoReader> node_info_reader;
-ReservedObject<RegistersHandler<33>> registers_handler;
+ReservedObject<RegistersHandler<34>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
 ReservedObject<FOCSyncSub> foc_sync_sub;
 
@@ -966,7 +966,7 @@ void setup_subscriptions() {
     };
 
     registers_handler.create(
-        std::array<RegisterDefinition, 33>{{
+        std::array<RegisterDefinition, 34>{{
             {
                 "state.is_on",
                 [](
@@ -1080,6 +1080,19 @@ void setup_subscriptions() {
                     response.persistent = false;
                     response._mutable = false;
                     fill_register_natural32(v_out, foc_cycle_sync.staged_status_progress());
+                }
+            },
+            {
+                "sync.diag.status_queue_progress",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    (void) v_in;
+                    response.persistent = false;
+                    response._mutable = false;
+                    fill_register_natural32(v_out, foc_cycle_sync.status_queue_progress());
                 }
             },
             {

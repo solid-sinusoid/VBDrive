@@ -284,6 +284,20 @@ void test_duplicate_staged_commands_coalesce_retry_status()
     assert(!sync.pop_status().has_value());
 }
 
+void test_main_status_queue_overflow_retains_drop_diagnostic()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+
+    // The ring has seven usable entries.  The eighth status must not silently
+    // erase the evidence needed to diagnose a delayed acknowledgement on a
+    // physical drive.
+    for (std::uint16_t cycle_id = 1U; cycle_id <= 8U; ++cycle_id) {
+        assert(sync.on_sync(cycle_id, SyncPhase::Run, cycle_id) == SyncResult::Rejected);
+    }
+
+    assert(sync.status_queue_progress() == 0x00080001U);
+}
+
 void test_staged_command_does_not_start_watchdog_and_mode_change_clears_session()
 {
     FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
@@ -460,6 +474,7 @@ int main()
     test_invalid_target_is_rejected();
     test_command_progress_keeps_last_received_cycle_after_rejection();
     test_duplicate_staged_commands_coalesce_retry_status();
+    test_main_status_queue_overflow_retains_drop_diagnostic();
     test_staged_command_does_not_start_watchdog_and_mode_change_clears_session();
     test_failed_hardware_apply_is_rejected();
     test_idle_session_accepts_forward_cycle_gap();

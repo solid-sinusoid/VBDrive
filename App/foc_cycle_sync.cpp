@@ -46,6 +46,8 @@ void FocCycleSync::push_main_status(const CommandStatus status)
 {
     const auto next = static_cast<std::uint8_t>((main_status_head_ + 1U) % status_capacity);
     if (next == main_status_tail_) {
+        main_status_drop_count_.fetch_add(1U, std::memory_order_relaxed);
+        last_main_status_drop_cycle_.store(status.cycle_id, std::memory_order_relaxed);
         return;
     }
     main_statuses_[main_status_head_] = status;
@@ -438,6 +440,13 @@ std::uint32_t FocCycleSync::staged_status_progress() const
 {
     return static_cast<std::uint32_t>(staged_status_pop_count_.load(std::memory_order_relaxed)) |
            (static_cast<std::uint32_t>(last_staged_status_cycle_.load(std::memory_order_relaxed)) << 16U);
+}
+
+std::uint32_t FocCycleSync::status_queue_progress() const
+{
+    return static_cast<std::uint32_t>(main_status_drop_count_.load(std::memory_order_relaxed)) |
+           (static_cast<std::uint32_t>(
+             last_main_status_drop_cycle_.load(std::memory_order_relaxed)) << 16U);
 }
 
 std::uint16_t FocCycleSync::run_status_progress() const
