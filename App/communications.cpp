@@ -1,4 +1,5 @@
 #include "app.h"
+#include "fdcan_timing.hpp"
 
 #include <cyphal/node/node_info_handler.h>
 #include <cyphal/node/registers_handler.hpp>
@@ -115,9 +116,13 @@ void start_cyphal() {
 
     setup_subscriptions();
 
+    const auto tdc_offset_tq = vbdrive::fdcan::tx_delay_compensation_offset_tq(
+        hfdcan1.Init.DataTimeSeg1,
+        hfdcan1.Init.DataPrescaler,
+        FDCAN_TDC_OFFSET_TQ);
     HAL_IMPORTANT(HAL_FDCAN_ConfigTxDelayCompensation(
         &hfdcan1,
-        hfdcan1.Init.DataTimeSeg1 * hfdcan1.Init.DataPrescaler,
+        tdc_offset_tq,
         0
     ))
     HAL_IMPORTANT(HAL_FDCAN_EnableTxDelayCompensation(&hfdcan1))
