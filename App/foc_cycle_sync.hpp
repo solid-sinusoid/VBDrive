@@ -81,6 +81,10 @@ public:
     std::uint32_t run_progress() const;
     std::uint32_t command_progress() const;
     std::uint32_t staged_status_progress() const;
+    // High 16 bits: cycle whose main status could not enter the bounded FIFO.
+    // Low 8 bits: cumulative FIFO-full events.  Both survive reset_session()
+    // so they explain a fail-closed synchronized startup after torque release.
+    std::uint32_t status_queue_progress() const;
     // Low byte: repeated RUN markers accepted after apply. High byte: RUN
     // APPLIED statuses removed from the firmware mailbox for CAN publishing.
     std::uint16_t run_status_progress() const;
@@ -142,6 +146,8 @@ private:
     std::atomic<std::uint16_t> last_command_cycle_{};
     std::atomic<std::uint8_t> staged_status_pop_count_{};
     std::atomic<std::uint16_t> last_staged_status_cycle_{};
+    std::atomic<std::uint8_t> main_status_drop_count_{};
+    std::atomic<std::uint16_t> last_main_status_drop_cycle_{};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
