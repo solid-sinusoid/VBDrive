@@ -16,4 +16,18 @@ int main()
     diagnostics.record(MotorDisableReason::SyncWatchdog);
     assert(diagnostics.reason() == MotorDisableReason::SyncWatchdog);
     assert(diagnostics.count() == 2U);
+    assert(diagnostics.packed_state() == 0x00000202U);
+
+    const FdcanDiagnosticSnapshot can{
+        .tx_error_count = 0x12U,
+        .rx_error_count = 0x34U,
+        .error_logging_count = 0x56U,
+        .last_error_code = 5U,
+        .bus_off = true,
+        .error_passive = false,
+        .warning = true,
+        .protocol_exception = true,
+        .rx_error_passive = true,
+    };
+    assert(pack_fdcan_diagnostics(can) == 0xED563412U);
 }

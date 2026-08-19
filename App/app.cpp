@@ -522,6 +522,24 @@ static bool config_save_pending = false;
 static bool bootloader_reboot_pending = false;
 static bool motor_stop_pending = false;
 
+static std::uint32_t read_fdcan_diagnostics() {
+    FDCAN_ProtocolStatusTypeDef protocol{};
+    FDCAN_ErrorCountersTypeDef counters{};
+    (void) HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocol);
+    (void) HAL_FDCAN_GetErrorCounters(&hfdcan1, &counters);
+    return pack_fdcan_diagnostics({
+        .tx_error_count = static_cast<std::uint8_t>(counters.TxErrorCnt),
+        .rx_error_count = static_cast<std::uint8_t>(counters.RxErrorCnt),
+        .error_logging_count = static_cast<std::uint8_t>(counters.ErrorLogging),
+        .last_error_code = static_cast<std::uint8_t>(protocol.LastErrorCode),
+        .bus_off = protocol.BusOff != 0U,
+        .error_passive = protocol.ErrorPassive != 0U,
+        .warning = protocol.Warning != 0U,
+        .protocol_exception = protocol.ProtocolException != 0U,
+        .rx_error_passive = counters.RxErrorPassive != 0U,
+    });
+}
+
 using ConfigFloatSetter = void (*)(VBDriveConfig&, float);
 using ConfigFloatGetter = float (*)(const VBDriveConfig&);
 using ConfigU32Setter = bool (*)(VBDriveConfig&, uint32_t);
@@ -975,7 +993,7 @@ void setup_subscriptions() {
                 }
             },
             {
-                "diag.disable_reason",
+                "diag.disable",
                 [](
                     const uavcan_register_Value_1_0& v_in,
                     uavcan_register_Value_1_0& v_out,
@@ -984,13 +1002,11 @@ void setup_subscriptions() {
                     (void) v_in;
                     response.persistent = false;
                     response._mutable = false;
-                    fill_register_natural32(
-                        v_out,
-                        static_cast<std::uint32_t>(motor_disable_diagnostics.reason()));
+                    fill_register_natural32(v_out, motor_disable_diagnostics.packed_state());
                 }
             },
             {
-                "diag.disable_count",
+                "diag.can",
                 [](
                     const uavcan_register_Value_1_0& v_in,
                     uavcan_register_Value_1_0& v_out,
@@ -999,7 +1015,7 @@ void setup_subscriptions() {
                     (void) v_in;
                     response.persistent = false;
                     response._mutable = false;
-                    fill_register_natural32(v_out, motor_disable_diagnostics.count());
+                    fill_register_natural32(v_out, read_fdcan_diagnostics());
                 }
             },
             {
