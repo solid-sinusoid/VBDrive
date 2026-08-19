@@ -264,7 +264,8 @@ void test_command_progress_keeps_last_received_cycle_after_rejection()
     assert(sync.stage(command(101), true, 100) == StageResult::Staged);
     (void) require_status(sync);
     assert(sync.stage(command(102), false, 101) == StageResult::Rejected);
-    assert(sync.command_progress() == 0x00660102U);
+    assert(sync.stage(command(0), true, 102) == StageResult::Staged);
+    assert(sync.command_progress() == 0x00660203U);
 }
 
 void test_staged_command_does_not_start_watchdog_and_mode_change_clears_session()
