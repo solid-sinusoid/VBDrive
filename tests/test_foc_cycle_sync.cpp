@@ -89,8 +89,8 @@ void test_missing_and_duplicate_sync()
     assert(!sync.consume_armed(131).has_value());
     // A repeated RUN marker is an idempotent acknowledgement probe.  It must
     // also keep the RUN watchdog alive while the main loop publishes APPLIED.
-    assert(sync.poll_watchdog(15129) == WatchdogAction::Hold);
-    assert(sync.poll_watchdog(15130) == WatchdogAction::Disable);
+    assert(sync.poll_watchdog(50129) == WatchdogAction::Hold);
+    assert(sync.poll_watchdog(50130) == WatchdogAction::Disable);
 }
 
 void test_repeated_applied_run_does_not_starve_next_staged()
@@ -361,7 +361,7 @@ void test_prepare_timeout_disables_at_250_ms()
     assert(sync.poll_watchdog(251010) == WatchdogAction::Disable);
 }
 
-void test_matching_run_arms_15_ms_watchdog()
+void test_matching_run_arms_default_50_ms_watchdog()
 {
     FocCycleSync sync{SyncMode::Synchronized};
     assert(sync.stage(command(4), true, 100) == StageResult::Staged);
@@ -380,8 +380,12 @@ void test_matching_run_arms_15_ms_watchdog()
     sync.complete_apply(*applied, true);
     (void) require_status(sync);
 
-    assert(sync.poll_watchdog(16009) == WatchdogAction::Hold);
-    assert(sync.poll_watchdog(16010) == WatchdogAction::Disable);
+    // При цикле 200 Гц окно в три периода (15 мс) недостаточно для
+    // кратковременного джиттера шины и главного цикла во время group RUN.
+    // Десять периодов удерживают привод при таком джиттере, но сохраняют
+    // fail-closed через 50 мс при настоящей потере SYNC.
+    assert(sync.poll_watchdog(51009) == WatchdogAction::Hold);
+    assert(sync.poll_watchdog(51010) == WatchdogAction::Disable);
 }
 
 void test_prepare_cannot_downgrade_run()
@@ -397,7 +401,7 @@ void test_prepare_cannot_downgrade_run()
 
     assert(sync.on_sync(7, SyncPhase::Prepare, 10000) == SyncResult::Rejected);
     assert(require_status(sync).reason == StatusReason::OutOfRange);
-    assert(sync.poll_watchdog(15110) == WatchdogAction::Disable);
+    assert(sync.poll_watchdog(50110) == WatchdogAction::Disable);
 }
 
 void test_unknown_phase_is_rejected()
@@ -434,7 +438,7 @@ int main()
     test_reset_session_accepts_restarted_cycle_counter();
     test_prepare_without_matching_refreshes_only_prepared_node();
     test_prepare_timeout_disables_at_250_ms();
-    test_matching_run_arms_15_ms_watchdog();
+    test_matching_run_arms_default_50_ms_watchdog();
     test_prepare_cannot_downgrade_run();
     test_unknown_phase_is_rejected();
 }
