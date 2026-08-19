@@ -16,6 +16,7 @@ struct FdcanDiagnosticSnapshot {
     std::uint8_t rx_error_count{};
     std::uint8_t error_logging_count{};
     std::uint8_t last_error_code{};
+    std::uint8_t data_last_error_code{};
     bool bus_off{};
     bool error_passive{};
     bool warning{};
@@ -29,11 +30,9 @@ constexpr std::uint32_t pack_fdcan_diagnostics(const FdcanDiagnosticSnapshot& sn
     value |= static_cast<std::uint32_t>(snapshot.rx_error_count) << 8U;
     value |= static_cast<std::uint32_t>(snapshot.error_logging_count) << 16U;
     value |= static_cast<std::uint32_t>(snapshot.last_error_code & 0x07U) << 24U;
-    value |= static_cast<std::uint32_t>(snapshot.bus_off) << 27U;
-    value |= static_cast<std::uint32_t>(snapshot.error_passive) << 28U;
-    value |= static_cast<std::uint32_t>(snapshot.warning) << 29U;
-    value |= static_cast<std::uint32_t>(snapshot.protocol_exception) << 30U;
-    value |= static_cast<std::uint32_t>(snapshot.rx_error_passive) << 31U;
+    value |= static_cast<std::uint32_t>(snapshot.data_last_error_code & 0x07U) << 27U;
+    value |= static_cast<std::uint32_t>(snapshot.bus_off) << 30U;
+    value |= static_cast<std::uint32_t>(snapshot.error_passive) << 31U;
     return value;
 }
 
