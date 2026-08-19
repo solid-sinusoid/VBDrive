@@ -21,6 +21,7 @@ void FocCycleSync::reset_session()
         slot.state.store(SlotState::Empty, std::memory_order_release);
     }
     applied_mailbox_.valid.store(false, std::memory_order_release);
+    staged_retry_mailbox_.valid.store(false, std::memory_order_release);
     immediate_apply_.valid.store(false, std::memory_order_release);
     last_apply_offset_microsecond_.store(0, std::memory_order_relaxed);
     last_applied_phase_.store(
@@ -58,6 +59,15 @@ void FocCycleSync::publish_applied_from_isr(const CommandStatus status)
     }
     applied_mailbox_.status = status;
     applied_mailbox_.valid.store(true, std::memory_order_release);
+}
+
+void FocCycleSync::publish_staged_retry(const CommandStatus status)
+{
+    if (staged_retry_mailbox_.valid.load(std::memory_order_acquire)) {
+        return;
+    }
+    staged_retry_mailbox_.status = status;
+    staged_retry_mailbox_.valid.store(true, std::memory_order_release);
 }
 
 FocCycleSync::Slot* FocCycleSync::find_slot(
@@ -115,7 +125,7 @@ StageResult FocCycleSync::stage(
     if ((find_slot(command.cycle_id, SlotState::Staged) != nullptr) ||
         (find_slot(command.cycle_id, SlotState::Armed) != nullptr)) {
         command_staged_count_.fetch_add(1U, std::memory_order_relaxed);
-        push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
+        publish_staged_retry({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         return StageResult::Staged;
     }
 
@@ -387,18 +397,25 @@ std::optional<CommandStatus> FocCycleSync::pop_status()
         }
         return status;
     }
-    if (!applied_mailbox_.valid.load(std::memory_order_acquire)) {
+    if (applied_mailbox_.valid.load(std::memory_order_acquire)) {
+        const auto status = applied_mailbox_.status;
+        applied_mailbox_.valid.store(false, std::memory_order_release);
+        if ((status.status == StatusCode::Applied) &&
+            has_last_applied_.load(std::memory_order_acquire) &&
+            (status.cycle_id == last_applied_cycle_.load(std::memory_order_relaxed)) &&
+            (last_applied_phase_.load(std::memory_order_relaxed) ==
+             static_cast<std::uint8_t>(SyncPhase::Run))) {
+            run_applied_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        return status;
+    }
+    if (!staged_retry_mailbox_.valid.load(std::memory_order_acquire)) {
         return std::nullopt;
     }
-    const auto status = applied_mailbox_.status;
-    applied_mailbox_.valid.store(false, std::memory_order_release);
-    if ((status.status == StatusCode::Applied) &&
-        has_last_applied_.load(std::memory_order_acquire) &&
-        (status.cycle_id == last_applied_cycle_.load(std::memory_order_relaxed)) &&
-        (last_applied_phase_.load(std::memory_order_relaxed) ==
-         static_cast<std::uint8_t>(SyncPhase::Run))) {
-        run_applied_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
-    }
+    const auto status = staged_retry_mailbox_.status;
+    staged_retry_mailbox_.valid.store(false, std::memory_order_release);
+    staged_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+    last_staged_status_cycle_.store(status.cycle_id, std::memory_order_relaxed);
     return status;
 }
 

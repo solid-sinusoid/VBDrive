@@ -114,6 +114,7 @@ private:
 
     void push_main_status(CommandStatus status);
     void publish_applied_from_isr(CommandStatus status);
+    void publish_staged_retry(CommandStatus status);
     Slot* find_slot(std::uint16_t cycle_id, SlotState required_state);
     const Slot* find_slot(std::uint16_t cycle_id, SlotState required_state) const;
     static std::int32_t saturated_offset(std::uint64_t apply_us, std::uint64_t marker_us);
@@ -149,6 +150,7 @@ private:
     std::uint8_t main_status_head_{};
     std::uint8_t main_status_tail_{};
     StatusMailbox applied_mailbox_{};
+    StatusMailbox staged_retry_mailbox_{};
     ImmediateApplyMailbox immediate_apply_{};
 };
 
