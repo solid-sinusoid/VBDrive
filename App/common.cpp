@@ -103,6 +103,7 @@ __attribute__((hot)) void main_callback() {
                 } else {
                     motor->set_foc_point(FOCTarget{0});
                     motor->set_current_regulator_params(0.0f, 0.0f);
+                    record_motor_disable(MotorDisableReason::InvalidFocPoint);
                     motor->set_state(false);
                 }
                 foc_cycle_sync_complete_apply(*applied, accepted);

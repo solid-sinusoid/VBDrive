@@ -251,6 +251,7 @@ alignas(4) static CalibrationData calibration_data;  // avoid stack overflow and
 static std::aligned_storage_t<sizeof(VBDrive), alignof(VBDrive)> motor_storage;
 static VBDrive* motor = nullptr;
 static FocCycleSync foc_cycle_sync{SyncMode::Synchronized};
+static MotorDisableDiagnostics motor_disable_diagnostics;
 VBDrive* get_motor() {
     return motor;
 }
@@ -261,6 +262,10 @@ std::optional<AppliedCycle> consume_foc_cycle_command(const micros apply_us) {
 
 void foc_cycle_sync_complete_apply(const AppliedCycle& applied, const bool accepted) {
     foc_cycle_sync.complete_apply(applied, accepted);
+}
+
+void record_motor_disable(const MotorDisableReason reason) {
+    motor_disable_diagnostics.record(reason);
 }
 
 static int8_t config_angle_direction(const VBDriveConfig& config_data) {
@@ -568,6 +573,7 @@ static void stop_motor_if_requested() {
         return;
     }
     motor_stop_pending = false;
+    record_motor_disable(MotorDisableReason::RegisterStop);
     motor->set_state(false);
     reset_foc_cycle_session();
 }
@@ -635,6 +641,7 @@ void in_loop_reporting(millis current_t) {
     if (foc_cycle_sync.poll_watchdog(micros_64()) == WatchdogAction::Disable) {
         motor->set_foc_point(FOCTarget{0});
         motor->set_current_regulator_params(0.0f, 0.0f);
+        record_motor_disable(MotorDisableReason::SyncWatchdog);
         motor->set_state(false);
         reset_foc_cycle_session();
     }
@@ -784,7 +791,7 @@ public:
 
 // NOTE: underlying CanardRxSubscriptions are HUGE - 552 bytes each. C++ wrapper size is negligible in comparison
 ReservedObject<NodeInfoReader> node_info_reader;
-ReservedObject<RegistersHandler<29>> registers_handler;
+ReservedObject<RegistersHandler<31>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
 ReservedObject<FOCSyncSub> foc_sync_sub;
 
@@ -929,7 +936,7 @@ void setup_subscriptions() {
     };
 
     registers_handler.create(
-        std::array<RegisterDefinition, 29>{{
+        std::array<RegisterDefinition, 31>{{
             {
                 "state.is_on",
                 [](
@@ -965,6 +972,34 @@ void setup_subscriptions() {
                     response.persistent = false;
                     response._mutable = false;
                     fill_register_natural32(v_out, invalid_commands_counter);
+                }
+            },
+            {
+                "diag.disable_reason",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    (void) v_in;
+                    response.persistent = false;
+                    response._mutable = false;
+                    fill_register_natural32(
+                        v_out,
+                        static_cast<std::uint32_t>(motor_disable_diagnostics.reason()));
+                }
+            },
+            {
+                "diag.disable_count",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    (void) v_in;
+                    response.persistent = false;
+                    response._mutable = false;
+                    fill_register_natural32(v_out, motor_disable_diagnostics.count());
                 }
             },
             {
