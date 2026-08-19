@@ -11,6 +11,32 @@ enum class MotorDisableReason : std::uint32_t {
     StateManagerStop = 4,
 };
 
+struct FdcanDiagnosticSnapshot {
+    std::uint8_t tx_error_count{};
+    std::uint8_t rx_error_count{};
+    std::uint8_t error_logging_count{};
+    std::uint8_t last_error_code{};
+    bool bus_off{};
+    bool error_passive{};
+    bool warning{};
+    bool protocol_exception{};
+    bool rx_error_passive{};
+};
+
+constexpr std::uint32_t pack_fdcan_diagnostics(const FdcanDiagnosticSnapshot& snapshot) noexcept
+{
+    std::uint32_t value = snapshot.tx_error_count;
+    value |= static_cast<std::uint32_t>(snapshot.rx_error_count) << 8U;
+    value |= static_cast<std::uint32_t>(snapshot.error_logging_count) << 16U;
+    value |= static_cast<std::uint32_t>(snapshot.last_error_code & 0x07U) << 24U;
+    value |= static_cast<std::uint32_t>(snapshot.bus_off) << 27U;
+    value |= static_cast<std::uint32_t>(snapshot.error_passive) << 28U;
+    value |= static_cast<std::uint32_t>(snapshot.warning) << 29U;
+    value |= static_cast<std::uint32_t>(snapshot.protocol_exception) << 30U;
+    value |= static_cast<std::uint32_t>(snapshot.rx_error_passive) << 31U;
+    return value;
+}
+
 class MotorDisableDiagnostics {
 public:
     void record(const MotorDisableReason reason) noexcept
@@ -27,6 +53,11 @@ public:
     std::uint32_t count() const noexcept
     {
         return count_.load(std::memory_order_relaxed);
+    }
+
+    std::uint32_t packed_state() const noexcept
+    {
+        return (static_cast<std::uint32_t>(reason()) & 0xFFU) | (count() << 8U);
     }
 
 private:
