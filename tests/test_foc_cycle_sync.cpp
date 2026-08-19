@@ -269,6 +269,21 @@ void test_command_progress_keeps_last_received_cycle_after_rejection()
     assert(sync.command_progress() == 0x00660203U);
 }
 
+void test_duplicate_staged_commands_coalesce_retry_status()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(201), true, 100) == StageResult::Staged);
+    for (std::uint64_t time = 101; time < 120; ++time) {
+        assert(sync.stage(command(201), true, time) == StageResult::Staged);
+    }
+    assert(require_status(sync).cycle_id == 201U);
+
+    assert(sync.stage(command(202), true, 120) == StageResult::Staged);
+    assert(require_status(sync).cycle_id == 202U);
+    assert(require_status(sync).cycle_id == 201U);
+    assert(!sync.pop_status().has_value());
+}
+
 void test_staged_command_does_not_start_watchdog_and_mode_change_clears_session()
 {
     FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
@@ -444,6 +459,7 @@ int main()
     test_immediate_mode_reports_negative_offset();
     test_invalid_target_is_rejected();
     test_command_progress_keeps_last_received_cycle_after_rejection();
+    test_duplicate_staged_commands_coalesce_retry_status();
     test_staged_command_does_not_start_watchdog_and_mode_change_clears_session();
     test_failed_hardware_apply_is_rejected();
     test_idle_session_accepts_forward_cycle_gap();
