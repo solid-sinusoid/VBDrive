@@ -91,6 +91,9 @@ StageResult FocCycleSync::stage(
     const bool target_valid,
     const std::uint64_t rx_us)
 {
+    command_received_count_.fetch_add(1U, std::memory_order_relaxed);
+    last_command_cycle_.store(command.cycle_id, std::memory_order_relaxed);
+
     if (!target_valid) {
         push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::InvalidNumber, 0});
         return StageResult::Rejected;
@@ -106,6 +109,7 @@ StageResult FocCycleSync::stage(
 
     if ((find_slot(command.cycle_id, SlotState::Staged) != nullptr) ||
         (find_slot(command.cycle_id, SlotState::Armed) != nullptr)) {
+        command_staged_count_.fetch_add(1U, std::memory_order_relaxed);
         push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         return StageResult::Staged;
     }
@@ -126,6 +130,7 @@ StageResult FocCycleSync::stage(
         slot.command = command;
         slot.marker_us = rx_us;
         slot.state.store(SlotState::Staged, std::memory_order_release);
+        command_staged_count_.fetch_add(1U, std::memory_order_relaxed);
         push_main_status({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         if (mode_ == SyncMode::Immediate) {
             slot.state.store(SlotState::Armed, std::memory_order_release);
@@ -394,6 +399,13 @@ std::uint32_t FocCycleSync::run_progress() const
            (static_cast<std::uint32_t>(run_consumed_count_.load(std::memory_order_relaxed)) << 8U) |
            (static_cast<std::uint32_t>(run_completed_count_.load(std::memory_order_relaxed)) << 16U) |
            (static_cast<std::uint32_t>(run_rejected_count_.load(std::memory_order_relaxed)) << 24U);
+}
+
+std::uint32_t FocCycleSync::command_progress() const
+{
+    return static_cast<std::uint32_t>(command_received_count_.load(std::memory_order_relaxed)) |
+           (static_cast<std::uint32_t>(command_staged_count_.load(std::memory_order_relaxed)) << 8U) |
+           (static_cast<std::uint32_t>(last_command_cycle_.load(std::memory_order_relaxed)) << 16U);
 }
 
 std::uint16_t FocCycleSync::run_status_progress() const

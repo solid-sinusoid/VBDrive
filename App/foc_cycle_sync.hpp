@@ -79,6 +79,7 @@ public:
     // and rejected. They deliberately survive reset_session() so they retain
     // the cause of a failed host activation after the motor has been disabled.
     std::uint32_t run_progress() const;
+    std::uint32_t command_progress() const;
     // Low byte: repeated RUN markers accepted after apply. High byte: RUN
     // APPLIED statuses removed from the firmware mailbox for CAN publishing.
     std::uint16_t run_status_progress() const;
@@ -134,6 +135,9 @@ private:
     std::atomic<std::uint8_t> run_rejected_count_{};
     std::atomic<std::uint8_t> run_repeat_sync_count_{};
     std::atomic<std::uint8_t> run_applied_status_pop_count_{};
+    std::atomic<std::uint8_t> command_received_count_{};
+    std::atomic<std::uint8_t> command_staged_count_{};
+    std::atomic<std::uint16_t> last_command_cycle_{};
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
