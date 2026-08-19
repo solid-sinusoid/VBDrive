@@ -21,6 +21,10 @@ if(NOT BOOTLOADER_FDCAN_ID_FORMAT MATCHES "^(standard|extended)$")
     message(FATAL_ERROR "BOOTLOADER_FDCAN_ID_FORMAT must be 'standard' or 'extended'")
 endif()
 option(BOOTLOADER_USE_EEPROM_CONFIG "Load VBBoot CAN node id and rates from VBDrive EEPROM config" OFF)
+set(FDCAN_TDC_OFFSET_TQ 0 CACHE STRING "FDCAN transmitter delay-compensation offset in tq; 0 uses DataTimeSeg1 * DataPrescaler")
+if(NOT FDCAN_TDC_OFFSET_TQ MATCHES "^[0-9]+$" OR FDCAN_TDC_OFFSET_TQ GREATER 63)
+    message(FATAL_ERROR "FDCAN_TDC_OFFSET_TQ must be an integer from 0 through 63")
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
@@ -39,6 +43,7 @@ add_compile_definitions(
     -DSTM32G
     -DSTM32G4
     -DARM_MATH_CM4
+    -DFDCAN_TDC_OFFSET_TQ=${FDCAN_TDC_OFFSET_TQ}
 )
 
 add_subdirectory(cmake/stm32cubemx)
