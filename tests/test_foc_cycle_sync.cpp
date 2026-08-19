@@ -263,6 +263,7 @@ void test_command_progress_keeps_last_received_cycle_after_rejection()
     FocCycleSync sync{SyncMode::Synchronized};
     assert(sync.stage(command(101), true, 100) == StageResult::Staged);
     (void) require_status(sync);
+    assert(sync.staged_status_progress() == 0x00650001U);
     assert(sync.stage(command(102), false, 101) == StageResult::Rejected);
     assert(sync.stage(command(0), true, 102) == StageResult::Staged);
     assert(sync.command_progress() == 0x00660203U);
