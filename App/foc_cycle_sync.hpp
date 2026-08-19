@@ -80,6 +80,9 @@ public:
     // the cause of a failed host activation after the motor has been disabled.
     std::uint32_t run_progress() const;
     std::uint32_t command_progress() const;
+    // STAGED may be published directly from the COMMAND subscription to keep
+    // its acknowledgement independent of the periodic telemetry loop.
+    void note_staged_status_published(std::uint16_t cycle_id);
     std::uint32_t staged_status_progress() const;
     // High 16 bits: cycle whose main status could not enter the bounded FIFO.
     // Low 8 bits: cumulative FIFO-full events.  Both survive reset_session()

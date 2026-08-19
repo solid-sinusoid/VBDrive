@@ -291,6 +291,15 @@ void test_command_progress_keeps_last_received_cycle_after_rejection()
     assert(sync.command_progress() == 0x00660203U);
 }
 
+void test_direct_staged_status_progress_is_retained()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    sync.note_staged_status_published(123U);
+    assert(sync.staged_status_progress() == 0x007B0001U);
+    sync.note_staged_status_published(0U);
+    assert(sync.staged_status_progress() == 0x007B0001U);
+}
+
 void test_duplicate_staged_commands_coalesce_retry_status()
 {
     FocCycleSync sync{SyncMode::Synchronized};
@@ -496,6 +505,7 @@ int main()
     test_immediate_mode_reports_negative_offset();
     test_invalid_target_is_rejected();
     test_command_progress_keeps_last_received_cycle_after_rejection();
+    test_direct_staged_status_progress_is_retained();
     test_duplicate_staged_commands_coalesce_retry_status();
     test_main_status_queue_overflow_retains_drop_diagnostic();
     test_staged_command_does_not_start_watchdog_and_mode_change_clears_session();

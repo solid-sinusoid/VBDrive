@@ -478,6 +478,15 @@ std::uint32_t FocCycleSync::command_progress() const
            (static_cast<std::uint32_t>(last_command_cycle_.load(std::memory_order_relaxed)) << 16U);
 }
 
+void FocCycleSync::note_staged_status_published(const std::uint16_t cycle_id)
+{
+    if (cycle_id == 0U) {
+        return;
+    }
+    staged_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+    last_staged_status_cycle_.store(cycle_id, std::memory_order_relaxed);
+}
+
 std::uint32_t FocCycleSync::staged_status_progress() const
 {
     return static_cast<std::uint32_t>(staged_status_pop_count_.load(std::memory_order_relaxed)) |
