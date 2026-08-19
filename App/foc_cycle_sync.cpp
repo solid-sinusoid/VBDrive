@@ -166,7 +166,11 @@ SyncResult FocCycleSync::on_sync(
         if (phase == SyncPhase::Run) {
             run_repeat_sync_count_.fetch_add(1U, std::memory_order_relaxed);
         }
-        push_main_status({
+        // The first APPLIED is delivered through applied_mailbox_ by the FOC
+        // ISR. Repeated RUN markers are only watchdog keepalives: coalesce
+        // their re-acknowledgement in that mailbox, otherwise they can fill
+        // the small FIFO and hide STAGED for the next control cycle.
+        publish_applied_from_isr({
             cycle_id,
             StatusCode::Applied,
             StatusReason::None,
