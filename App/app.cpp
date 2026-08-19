@@ -802,6 +802,14 @@ public:
             status_msg.status = static_cast<uint8_t>(StatusCode::Staged);
             status_msg.reason = static_cast<uint8_t>(StatusReason::None);
             status_msg.apply_offset_microsecond = 0;
+            const auto pending_tx_mask = hfdcan1.Instance->TXBRP & FDCAN_TXBRP_TRP;
+            const auto free_tx_slots = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+            if (vbdrive::fdcan::should_preempt_for_critical_status(pending_tx_mask, free_tx_slots)) {
+                // Acknowledge the control barrier before periodic telemetry.
+                // The discarded telemetry is immediately regenerated, while
+                // delaying STAGED makes the host fail the whole motor group.
+                (void)HAL_FDCAN_AbortTxRequest(&hfdcan1, pending_tx_mask);
+            }
             foc_cycle_sync.note_staged_status_published(msg.cycle_id);
             get_interface()->send_msg(
                 &status_msg,
