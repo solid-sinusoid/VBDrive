@@ -533,6 +533,7 @@ static std::uint32_t read_fdcan_diagnostics() {
         .rx_error_count = static_cast<std::uint8_t>(counters.RxErrorCnt),
         .error_logging_count = static_cast<std::uint8_t>(counters.ErrorLogging),
         .last_error_code = static_cast<std::uint8_t>(protocol.LastErrorCode),
+        .data_last_error_code = static_cast<std::uint8_t>(protocol.DataLastErrorCode),
         .bus_off = protocol.BusOff != 0U,
         .error_passive = protocol.ErrorPassive != 0U,
         .warning = protocol.Warning != 0U,
