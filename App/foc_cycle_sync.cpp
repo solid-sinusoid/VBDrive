@@ -374,6 +374,10 @@ std::optional<CommandStatus> FocCycleSync::pop_status()
     if (main_status_tail_ != main_status_head_) {
         const auto status = main_statuses_[main_status_tail_];
         main_status_tail_ = static_cast<std::uint8_t>((main_status_tail_ + 1U) % status_capacity);
+        if ((status.status == StatusCode::Staged) && (status.cycle_id != 0U)) {
+            staged_status_pop_count_.fetch_add(1U, std::memory_order_relaxed);
+            last_staged_status_cycle_.store(status.cycle_id, std::memory_order_relaxed);
+        }
         if ((status.status == StatusCode::Applied) &&
             has_last_applied_.load(std::memory_order_acquire) &&
             (status.cycle_id == last_applied_cycle_.load(std::memory_order_relaxed)) &&
@@ -411,6 +415,12 @@ std::uint32_t FocCycleSync::command_progress() const
     return static_cast<std::uint32_t>(command_received_count_.load(std::memory_order_relaxed)) |
            (static_cast<std::uint32_t>(command_staged_count_.load(std::memory_order_relaxed)) << 8U) |
            (static_cast<std::uint32_t>(last_command_cycle_.load(std::memory_order_relaxed)) << 16U);
+}
+
+std::uint32_t FocCycleSync::staged_status_progress() const
+{
+    return static_cast<std::uint32_t>(staged_status_pop_count_.load(std::memory_order_relaxed)) |
+           (static_cast<std::uint32_t>(last_staged_status_cycle_.load(std::memory_order_relaxed)) << 16U);
 }
 
 std::uint16_t FocCycleSync::run_status_progress() const
