@@ -1309,7 +1309,8 @@ void setup_subscriptions() {
     HAL_IMPORTANT(apply_filter(
         0,
         &hfdcan1,
-        foc_command_sub->make_filter(node_id)
+        foc_command_sub->make_filter(node_id),
+        FDCAN_FILTER_TO_RXFIFO1
     ))
 
     HAL_IMPORTANT(apply_filter(
@@ -1327,7 +1328,8 @@ void setup_subscriptions() {
     HAL_IMPORTANT(apply_filter(
         3,
         &hfdcan1,
-        foc_sync_sub->make_filter(node_id)
+        foc_sync_sub->make_filter(node_id),
+        FDCAN_FILTER_TO_RXFIFO1
     ))
 }
 //#pragma endregion
