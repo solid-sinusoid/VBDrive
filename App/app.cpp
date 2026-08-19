@@ -1,5 +1,6 @@
 //#pragma region Includes
 #include "app.h"
+#include "fdcan_tx_policy.hpp"
 #include "foc_cycle_sync.hpp"
 
 #include <array>
@@ -675,12 +676,23 @@ void in_loop_reporting(millis current_t) {
         status_msg.status = static_cast<uint8_t>(status->status);
         status_msg.reason = static_cast<uint8_t>(status->reason);
         status_msg.apply_offset_microsecond = status->apply_offset_microsecond;
+
+        const auto pending_tx_mask = hfdcan1.Instance->TXBRP & FDCAN_TXBRP_TRP;
+        const auto free_tx_slots = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+        if (vbdrive::fdcan::should_preempt_for_critical_status(pending_tx_mask, free_tx_slots)) {
+            // FIFO mode is reliable on STM32G431, but it cannot prioritize a
+            // command acknowledgement over three queued telemetry frames.
+            // A status is idempotent and retried by the host, while the
+            // telemetry is periodic, so discard only the blocked FIFO batch.
+            (void)HAL_FDCAN_AbortTxRequest(&hfdcan1, pending_tx_mask);
+        }
         get_interface()->send_msg(
             &status_msg,
             FOC_COMMAND_STATUS_PORT,
             &command_status_transfer_id,
             DEFAULT_TIMEOUT_MICROS,
             FOC_COMMAND_STATUS_PRIORITY);
+        get_interface()->process_tx_once();
     }
 
     static millis report_time = 0;
