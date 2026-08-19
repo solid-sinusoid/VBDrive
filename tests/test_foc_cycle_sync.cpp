@@ -258,6 +258,15 @@ void test_invalid_target_is_rejected()
     assert(status.reason == StatusReason::InvalidNumber);
 }
 
+void test_command_progress_keeps_last_received_cycle_after_rejection()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(101), true, 100) == StageResult::Staged);
+    (void) require_status(sync);
+    assert(sync.stage(command(102), false, 101) == StageResult::Rejected);
+    assert(sync.command_progress() == 0x00660102U);
+}
+
 void test_staged_command_does_not_start_watchdog_and_mode_change_clears_session()
 {
     FocCycleSync sync{SyncMode::Synchronized, 5000, 15000};
@@ -432,6 +441,7 @@ int main()
     test_watchdog_holds_twice_then_disables();
     test_immediate_mode_reports_negative_offset();
     test_invalid_target_is_rejected();
+    test_command_progress_keeps_last_received_cycle_after_rejection();
     test_staged_command_does_not_start_watchdog_and_mode_change_clears_session();
     test_failed_hardware_apply_is_rejected();
     test_idle_session_accepts_forward_cycle_gap();
