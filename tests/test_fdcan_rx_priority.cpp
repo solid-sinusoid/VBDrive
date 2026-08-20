@@ -9,7 +9,7 @@ int main()
     assert(order[0] == cyphal::fdcan::ReceiveFifo::Critical);
     assert(order[1] == cyphal::fdcan::ReceiveFifo::Regular);
     assert(cyphal::fdcan::maximum_frames_per_pass(
-               cyphal::fdcan::ReceiveFifo::Critical) == 16U);
+               cyphal::fdcan::ReceiveFifo::Critical) == 3U);
     assert(cyphal::fdcan::maximum_frames_per_pass(
                cyphal::fdcan::ReceiveFifo::Regular) == 1U);
 }
