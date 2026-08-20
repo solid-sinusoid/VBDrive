@@ -543,6 +543,22 @@ static std::uint32_t read_fdcan_diagnostics() {
     });
 }
 
+static std::uint32_t read_fdcan_rx_fifo_diagnostics() {
+    const auto fifo0_status = hfdcan1.Instance->RXF0S;
+    const auto fifo1_status = hfdcan1.Instance->RXF1S;
+    const auto interrupt_status = hfdcan1.Instance->IR;
+    return pack_fdcan_rx_fifo_diagnostics({
+        .fifo0_fill_level = static_cast<std::uint8_t>(
+            (fifo0_status & FDCAN_RXF0S_F0FL) >> FDCAN_RXF0S_F0FL_Pos),
+        .fifo0_full = (fifo0_status & FDCAN_RXF0S_F0F) != 0U,
+        .fifo0_lost = (interrupt_status & FDCAN_IR_RF0L) != 0U,
+        .fifo1_fill_level = static_cast<std::uint8_t>(
+            (fifo1_status & FDCAN_RXF1S_F1FL) >> FDCAN_RXF1S_F1FL_Pos),
+        .fifo1_full = (fifo1_status & FDCAN_RXF1S_F1F) != 0U,
+        .fifo1_lost = (interrupt_status & FDCAN_IR_RF1L) != 0U,
+    });
+}
+
 using ConfigFloatSetter = void (*)(VBDriveConfig&, float);
 using ConfigFloatGetter = float (*)(const VBDriveConfig&);
 using ConfigU32Setter = bool (*)(VBDriveConfig&, uint32_t);
@@ -846,7 +862,7 @@ public:
 
 // NOTE: underlying CanardRxSubscriptions are HUGE - 552 bytes each. C++ wrapper size is negligible in comparison
 ReservedObject<NodeInfoReader> node_info_reader;
-ReservedObject<RegistersHandler<34>> registers_handler;
+ReservedObject<RegistersHandler<35>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
 ReservedObject<FOCSyncSub> foc_sync_sub;
 
@@ -991,7 +1007,7 @@ void setup_subscriptions() {
     };
 
     registers_handler.create(
-        std::array<RegisterDefinition, 34>{{
+        std::array<RegisterDefinition, 35>{{
             {
                 "state.is_on",
                 [](
@@ -1053,6 +1069,19 @@ void setup_subscriptions() {
                     response.persistent = false;
                     response._mutable = false;
                     fill_register_natural32(v_out, read_fdcan_diagnostics());
+                }
+            },
+            {
+                "diag.can_rx_fifo",
+                [](
+                    const uavcan_register_Value_1_0& v_in,
+                    uavcan_register_Value_1_0& v_out,
+                    RegisterAccessResponse& response
+                ){
+                    (void) v_in;
+                    response.persistent = false;
+                    response._mutable = false;
+                    fill_register_natural32(v_out, read_fdcan_rx_fifo_diagnostics());
                 }
             },
             {
