@@ -85,13 +85,10 @@ void test_missing_and_duplicate_sync()
     sync.complete_apply(*applied, true);
     (void) require_status(sync);
     assert(sync.on_sync(12, SyncPhase::Run, 130) == SyncResult::Ignored);
-    // Повторный RUN запрашивает повтор APPLIED через отдельный mailbox, не
-    // занимая FIFO, предназначенный для STAGED/REJECTED.
-    const auto duplicate_applied = require_status(sync);
-    assert(duplicate_applied.cycle_id == 12);
-    assert(duplicate_applied.status == StatusCode::Applied);
-    assert(duplicate_applied.reason == StatusReason::None);
-    assert(duplicate_applied.apply_offset_microsecond == 25);
+    // Повторный RUN — только watchdog keepalive. APPLIED не дублируется:
+    // иначе шесть приводов с меньшими node-ID забивают CAN-приоритетом
+    // подтверждение J6 и переполняют его RX FIFO.
+    assert(!sync.pop_status().has_value());
     assert(!sync.consume_armed(131).has_value());
     // A repeated RUN marker is an idempotent acknowledgement probe.  It must
     // also keep the RUN watchdog alive while the main loop publishes APPLIED.
@@ -115,7 +112,7 @@ void test_deferred_run_never_arms_different_or_superseded_cycle()
     assert(!sync.consume_armed(121).has_value());
 }
 
-void test_repeated_applied_run_does_not_starve_next_staged()
+void test_repeated_applied_run_emits_no_duplicate_statuses()
 {
     FocCycleSync sync{SyncMode::Synchronized};
     assert(sync.stage(command(71), true, 100) == StageResult::Staged);
@@ -124,20 +121,20 @@ void test_repeated_applied_run_does_not_starve_next_staged()
     const auto applied = sync.consume_armed(120);
     assert(applied.has_value());
     sync.complete_apply(*applied, true);
+    const auto initial_applied = require_status(sync);
+    assert(initial_applied.cycle_id == 71);
+    assert(initial_applied.status == StatusCode::Applied);
 
-    // Хост повторяет RUN, пока ждёт подтверждение. Очередь на 7 записей не
-    // должна быть заполнена дубликатами APPLIED и вытеснить новый STAGED.
+    // Хост повторяет RUN, пока ждёт подтверждение. Повторы не должны
+    // публиковать APPLIED и занимать CAN/RX FIFO других приводов.
     for (std::uint64_t timestamp = 130; timestamp < 230; timestamp += 5) {
         assert(sync.on_sync(71, SyncPhase::Run, timestamp) == SyncResult::Ignored);
     }
+    assert(!sync.pop_status().has_value());
     assert(sync.stage(command(72), true, 230) == StageResult::Staged);
-
     const auto staged = require_status(sync);
     assert(staged.cycle_id == 72);
     assert(staged.status == StatusCode::Staged);
-    const auto applied_status = require_status(sync);
-    assert(applied_status.cycle_id == 71);
-    assert(applied_status.status == StatusCode::Applied);
     assert(!sync.pop_status().has_value());
 }
 
@@ -233,12 +230,11 @@ void test_run_progress_survives_session_reset()
     assert(sync.run_progress() == 0x00010101U);
     assert(sync.run_status_progress() == 0x0100U);
     assert(sync.on_sync(16, SyncPhase::Run, 121) == SyncResult::Ignored);
-    const auto duplicate = require_status(sync);
-    assert(duplicate.status == StatusCode::Applied);
-    assert(sync.run_status_progress() == 0x0201U);
+    assert(!sync.pop_status().has_value());
+    assert(sync.run_status_progress() == 0x0101U);
     sync.reset_session();
     assert(sync.run_progress() == 0x00010101U);
-    assert(sync.run_status_progress() == 0x0201U);
+    assert(sync.run_status_progress() == 0x0101U);
 }
 
 void test_watchdog_holds_twice_then_disables()
@@ -495,7 +491,7 @@ int main()
     test_rollover_and_slot_capacity();
     test_missing_and_duplicate_sync();
     test_deferred_run_never_arms_different_or_superseded_cycle();
-    test_repeated_applied_run_does_not_starve_next_staged();
+    test_repeated_applied_run_emits_no_duplicate_statuses();
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();
     test_duplicate_run_sync_keeps_watchdog_alive_while_armed();
