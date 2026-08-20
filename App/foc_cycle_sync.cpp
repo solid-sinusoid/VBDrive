@@ -218,15 +218,10 @@ SyncResult FocCycleSync::on_sync(
         if (phase == SyncPhase::Run) {
             run_repeat_sync_count_.fetch_add(1U, std::memory_order_relaxed);
         }
-        // The first APPLIED is delivered through applied_mailbox_ by the FOC
-        // ISR. Repeated RUN markers are only watchdog keepalives: coalesce
-        // their re-acknowledgement in that mailbox, otherwise they can fill
-        // the small FIFO and hide STAGED for the next control cycle.
-        publish_applied_from_isr({
-            cycle_id,
-            StatusCode::Applied,
-            StatusReason::None,
-            last_apply_offset_microsecond_.load(std::memory_order_relaxed)});
+        // APPLIED is emitted exactly once, by complete_apply(). A repeated
+        // RUN is solely a watchdog keepalive. Re-acknowledging every retry
+        // lets lower node-IDs win CAN arbitration repeatedly, which can fill
+        // a high node-ID drive's RX FIFO and make it miss the next RUN.
         return SyncResult::Ignored;
     }
     if (find_slot(cycle_id, SlotState::Armed) != nullptr) {
