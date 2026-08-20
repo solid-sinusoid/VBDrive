@@ -1159,7 +1159,7 @@ void setup_subscriptions() {
                     (void) v_in;
                     response.persistent = false;
                     response._mutable = false;
-                    fill_register_natural32(v_out, 2U);
+                    fill_register_natural32(v_out, 3U);
                 }
             },
             {
