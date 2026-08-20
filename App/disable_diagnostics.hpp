@@ -36,6 +36,31 @@ constexpr std::uint32_t pack_fdcan_diagnostics(const FdcanDiagnosticSnapshot& sn
     return value;
 }
 
+struct FdcanRxFifoDiagnosticSnapshot {
+    std::uint8_t fifo0_fill_level{};
+    bool fifo0_full{};
+    bool fifo0_lost{};
+    std::uint8_t fifo1_fill_level{};
+    bool fifo1_full{};
+    bool fifo1_lost{};
+};
+
+// FIFO0 and FIFO1 on STM32G431 each hold at most three FD frames.  Preserve
+// the current fill level and sticky overflow evidence in an independent
+// read-only register, so a lost FOC command can be distinguished from a bus
+// protocol error.
+constexpr std::uint32_t pack_fdcan_rx_fifo_diagnostics(
+    const FdcanRxFifoDiagnosticSnapshot& snapshot) noexcept
+{
+    std::uint32_t value = static_cast<std::uint32_t>(snapshot.fifo0_fill_level & 0x0FU);
+    value |= static_cast<std::uint32_t>(snapshot.fifo0_full) << 3U;
+    value |= static_cast<std::uint32_t>(snapshot.fifo0_lost) << 4U;
+    value |= static_cast<std::uint32_t>(snapshot.fifo1_fill_level & 0x0FU) << 8U;
+    value |= static_cast<std::uint32_t>(snapshot.fifo1_full) << 11U;
+    value |= static_cast<std::uint32_t>(snapshot.fifo1_lost) << 12U;
+    return value;
+}
+
 class MotorDisableDiagnostics {
 public:
     void record(const MotorDisableReason reason) noexcept

@@ -31,4 +31,14 @@ int main()
         .rx_error_passive = true,
     };
     assert(pack_fdcan_diagnostics(can) == 0x75563412U);
+
+    const FdcanRxFifoDiagnosticSnapshot rx_fifos{
+        .fifo0_fill_level = 3U,
+        .fifo0_full = true,
+        .fifo0_lost = false,
+        .fifo1_fill_level = 2U,
+        .fifo1_full = true,
+        .fifo1_lost = true,
+    };
+    assert(pack_fdcan_rx_fifo_diagnostics(rx_fifos) == 0x00001A0BU);
 }
