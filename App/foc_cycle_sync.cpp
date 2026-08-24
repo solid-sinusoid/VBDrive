@@ -43,6 +43,11 @@ void FocCycleSync::set_mode(const SyncMode mode)
     mode_ = mode;
 }
 
+void FocCycleSync::set_applied_retry_slot(const std::uint8_t node_id)
+{
+    applied_retry_slot_ = static_cast<std::uint8_t>(node_id % applied_retry_slot_count);
+}
+
 void FocCycleSync::push_main_status(const CommandStatus status)
 {
     const auto next = static_cast<std::uint8_t>((main_status_head_ + 1U) % status_capacity);
@@ -217,11 +222,19 @@ SyncResult FocCycleSync::on_sync(
         watchdog_reported_ = false;
         if (phase == SyncPhase::Run) {
             run_repeat_sync_count_.fetch_add(1U, std::memory_order_relaxed);
+            const auto retry_count = static_cast<std::uint8_t>(
+                current_applied_retry_count_.fetch_add(1U, std::memory_order_relaxed) + 1U);
+            if ((retry_count % applied_retry_slot_count) == applied_retry_slot_) {
+                publish_applied_from_isr({
+                    cycle_id,
+                    StatusCode::Applied,
+                    StatusReason::None,
+                    last_apply_offset_microsecond_.load(std::memory_order_relaxed)});
+            }
         }
-        // APPLIED is emitted exactly once, by complete_apply(). A repeated
-        // RUN is solely a watchdog keepalive. Re-acknowledging every retry
-        // lets lower node-IDs win CAN arbitration repeatedly, which can fill
-        // a high node-ID drive's RX FIFO and make it miss the next RUN.
+        // Повторный RUN поддерживает watchdog и в назначенном node-ID слоте
+        // восстанавливает потерянный APPLIED. В один retry отвечает не вся
+        // группа, поэтому CAN/RX FIFO не получает повторный burst.
         return SyncResult::Ignored;
     }
     if (find_slot(cycle_id, SlotState::Armed) != nullptr) {
@@ -341,6 +354,7 @@ std::optional<AppliedCycle> FocCycleSync::consume_armed(const std::uint64_t appl
 
 void FocCycleSync::complete_apply(const AppliedCycle& applied, const bool accepted)
 {
+    current_applied_retry_count_.store(0U, std::memory_order_relaxed);
     if (!accepted) {
         if (applied.phase == SyncPhase::Run) {
             run_rejected_count_.fetch_add(1U, std::memory_order_relaxed);
