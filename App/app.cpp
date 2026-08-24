@@ -897,6 +897,7 @@ void setup_subscriptions() {
     );
 
     const auto node_id = get_app_manager().get_node_id();
+    foc_cycle_sync.set_applied_retry_slot(node_id);
     auto make_persistent_float_register = [](
         const char* name,
         float DriveRuntimeConfig::* runtime_config_field,
@@ -1159,7 +1160,7 @@ void setup_subscriptions() {
                     (void) v_in;
                     response.persistent = false;
                     response._mutable = false;
-                    fill_register_natural32(v_out, 4U);
+                    fill_register_natural32(v_out, 5U);
                 }
             },
             {

@@ -75,6 +75,9 @@ public:
     bool immediate_marker(std::uint16_t cycle_id, std::uint64_t marker_us);
     WatchdogAction poll_watchdog(std::uint64_t now_us);
     std::optional<CommandStatus> pop_status();
+    // Повторные APPLIED распределяются по восьми слотам, чтобы не
+    // переполнять RX FIFO одновременными ответами всей группы.
+    void set_applied_retry_slot(std::uint8_t node_id);
     // Four 8-bit counters: RUN armed, consumed by the FOC ISR, completed,
     // and rejected. They deliberately survive reset_session() so they retain
     // the cause of a failed host activation after the motor has been disabled.
@@ -125,6 +128,7 @@ private:
 
     static constexpr std::uint8_t no_slot = std::numeric_limits<std::uint8_t>::max();
     static constexpr std::size_t status_capacity = 8;
+    static constexpr std::uint8_t applied_retry_slot_count = 8U;
     static constexpr std::uint32_t prepare_watchdog_us = 250000U;
 
     enum class SessionPhase : std::uint8_t { Idle, Prepare, Run };
@@ -153,7 +157,9 @@ private:
     std::atomic<std::uint8_t> run_completed_count_{};
     std::atomic<std::uint8_t> run_rejected_count_{};
     std::atomic<std::uint8_t> run_repeat_sync_count_{};
+    std::atomic<std::uint8_t> current_applied_retry_count_{};
     std::atomic<std::uint8_t> run_applied_status_pop_count_{};
+    std::uint8_t applied_retry_slot_{};
     std::atomic<std::uint8_t> command_received_count_{};
     std::atomic<std::uint8_t> command_staged_count_{};
     std::atomic<std::uint16_t> last_command_cycle_{};

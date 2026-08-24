@@ -112,9 +112,10 @@ void test_deferred_run_never_arms_different_or_superseded_cycle()
     assert(!sync.consume_armed(121).has_value());
 }
 
-void test_repeated_applied_run_emits_no_duplicate_statuses()
+void test_repeated_applied_run_retries_in_configured_node_slot()
 {
     FocCycleSync sync{SyncMode::Synchronized};
+    sync.set_applied_retry_slot(3U);
     assert(sync.stage(command(71), true, 100) == StageResult::Staged);
     (void) require_status(sync);
     assert(sync.on_sync(71, SyncPhase::Run, 110) == SyncResult::Armed);
@@ -125,11 +126,19 @@ void test_repeated_applied_run_emits_no_duplicate_statuses()
     assert(initial_applied.cycle_id == 71);
     assert(initial_applied.status == StatusCode::Applied);
 
-    // Хост повторяет RUN, пока ждёт подтверждение. Повторы не должны
-    // публиковать APPLIED и занимать CAN/RX FIFO других приводов.
-    for (std::uint64_t timestamp = 130; timestamp < 230; timestamp += 5) {
-        assert(sync.on_sync(71, SyncPhase::Run, timestamp) == SyncResult::Ignored);
-    }
+    // Пять приводов получают одинаковые повторы. Привод в слоте 3
+    // молчит на повторах 1 и 2, а на повторе 3 восстанавливает возможно
+    // потерянный APPLIED, не создавая одновременный burst.
+    assert(sync.on_sync(71, SyncPhase::Run, 130) == SyncResult::Ignored);
+    assert(!sync.pop_status().has_value());
+    assert(sync.on_sync(71, SyncPhase::Run, 135) == SyncResult::Ignored);
+    assert(!sync.pop_status().has_value());
+    assert(sync.on_sync(71, SyncPhase::Run, 140) == SyncResult::Ignored);
+    const auto retried_applied = require_status(sync);
+    assert(retried_applied.cycle_id == 71U);
+    assert(retried_applied.status == StatusCode::Applied);
+    assert(retried_applied.apply_offset_microsecond == 10);
+    assert(sync.on_sync(71, SyncPhase::Run, 145) == SyncResult::Ignored);
     assert(!sync.pop_status().has_value());
     assert(sync.stage(command(72), true, 230) == StageResult::Staged);
     const auto staged = require_status(sync);
@@ -491,7 +500,7 @@ int main()
     test_rollover_and_slot_capacity();
     test_missing_and_duplicate_sync();
     test_deferred_run_never_arms_different_or_superseded_cycle();
-    test_repeated_applied_run_emits_no_duplicate_statuses();
+    test_repeated_applied_run_retries_in_configured_node_slot();
     test_duplicate_command_is_idempotent_before_sync();
     test_duplicate_run_sync_is_idempotent_before_apply();
     test_duplicate_run_sync_keeps_watchdog_alive_while_armed();
