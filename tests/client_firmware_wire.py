@@ -17,7 +17,11 @@ codec_path=client/'src/cyphal_codec.cpp'
 codec_sha=hashlib.sha256(codec_path.read_bytes()).hexdigest()
 test=runpy.run_path(str(root/'tests/synchronized_control.py'))
 program=test['program']
-program=program.replace('#include <cassert>', '#include <cassert>\n#include "vbdrive_cyphal_hardware/cyphal_codec.hpp"\n#include <voltbro/foc/state_simple_1_0.h>')
+node_header=(root/'Drivers/libcxxcanard/cyphal/node/node_info_handler.h').read_text()
+setter_start=node_header.index('void set_image_crc(')
+setter_end=node_header.index('}',setter_start)+1
+program=program.replace('#include <cassert>', '#include <cassert>\n#include <cstring>\n#include "vbdrive_cyphal_hardware/cyphal_codec.hpp"\n#include "node_info_conversion.hpp"\n#include "firmware_crc.hpp"\n#include <voltbro/foc/state_simple_1_0.h>')
+program=program.replace('int main(){','struct TestNodeInfo { uavcan_node_GetInfo_Response_1_0 node_info{};\n'+node_header[setter_start:setter_end]+'\n};\nint main(){')
 check=r'''
     // The actual client encoder drives real libcanard reassembly and the
     // firmware subscription/IRQ. The actual client decoder reads the ACK.
@@ -72,6 +76,21 @@ check=r'''
                host_state.velocity_rad_per_s==-1 && host_state.torque_nm==1.25f &&
                host_state.current_a==2 && host_state.bus_voltage_v==24 &&
                std::fabs(host_state.stator_temp_k-310.15f)<.001f);
+        TestNodeInfo node;
+        const uint8_t sample_image[]{1,2,3};const auto image_crc=firmware_crc64(sample_image,sizeof(sample_image));
+        node.set_image_crc(image_crc);node.node_info.software_version.major=5;
+        const char node_name[]="org.voltbro.vbdrive";
+        std::memcpy(node.node_info.name.elements,node_name,sizeof(node_name)-1);
+        node.node_info.name.count=sizeof(node_name)-1;
+        uint8_t info_wire[uavcan_node_GetInfo_Response_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_]{};
+        size=sizeof(info_wire);
+        assert(uavcan_node_GetInfo_Response_1_0_serialize_(&node.node_info,info_wire,&size)==0);
+        CanardRxTransfer info_transfer{};info_transfer.metadata.transfer_kind=CanardTransferKindResponse;
+        info_transfer.metadata.port_id=uavcan_node_GetInfo_1_0_FIXED_PORT_ID_;
+        info_transfer.metadata.remote_node_id=1;info_transfer.metadata.transfer_id=4;
+        info_transfer.payload=info_wire;info_transfer.payload_size=size;
+        const auto info=vbdrive_cyphal_hardware::detail::decode_node_info_response(info_transfer,1,4);
+        assert(info && info->software_major==5 && info->software_image_crc && *info->software_image_crc==image_crc);
         canardRxUnsubscribe(&rx,CanardTransferKindMessage,2301);
         canardRxUnsubscribe(&rx,CanardTransferKindMessage,3809);
     }
@@ -88,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='vbdrive-client-firmware-') as d:
                     '-o',str(p/'codec.o')],check=True)
     subprocess.run(['c++','-std=c++20','-Wall','-Wextra','-Werror','-I'+str(root/'App'),
                     '-I'+str(lib.parent),'-I'+str(root/'build/Release/cyphal_types/c'),
-                    '-I'+str(client/'include'),str(p/'test.cpp'),str(root/'App/foc_cycle_sync.cpp'),
+                    '-I'+str(client/'include'),'-I'+str(client/'src'),str(p/'test.cpp'),str(root/'App/foc_cycle_sync.cpp'),
                     str(p/'canard.o'),str(p/'codec.o'),'-o',str(p/'test')],check=True)
     subprocess.run([str(p/'test')],check=True)
-print(f'PASS: actual client codec → libcanard → production sync IRQ → client ACK decoder; codec SHA256={codec_sha}; no hardware')
+print(f'PASS: client codec → libcanard → firmware sync IRQ; client ACK, state and GetInfo decoders; codec SHA256={codec_sha}; no hardware')
