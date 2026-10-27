@@ -91,7 +91,7 @@ struct FOC : BLDCController {
         return result;
     }
 '''
-for name in ("TrajectoryState servo_initial_state(", "void reset_control()", "bool set_foc_point(", "void reset_servo_input()", "bool set_servo_input_config(", "bool set_servo_command(", "PIDConfig get_servo_config(", "void update_servo_config("):
+for name in ("TrajectoryState servo_initial_state(", "void reset_control()", "bool is_foc_point_valid(", "bool set_foc_point(", "void reset_servo_input()", "bool set_servo_input_config(", "bool set_servo_command(", "PIDConfig get_servo_config(", "void update_servo_config("):
     source += function(foc, name) + "\n"
 source += "};\n" + function(implementation, "float FOC::servo_torque()")
 source += r'''
@@ -185,6 +185,7 @@ float reported_torque(FOC& motor,float I_Q) {
 float clipped_current(FOC& motor,float i_q_set) {
     const auto& drive_info=motor.drive_info;
     const auto& drive_runtime_config=motor.drive_runtime_config;
+    auto get_effective_torque_limit=[&] {return motor.get_effective_torque_limit();};
 ''' + current_limits + r'''
     return i_q_set;
 }
@@ -195,6 +196,36 @@ void near(float actual, float expected, float tolerance=1e-5f) { assert(std::fab
 FOC* interrupted_motor=nullptr;
 void foc_interrupt() { ++interrupted_motor->control_tick; interrupted_motor->servo_torque(); }
 int main() {
+    // Staging a target must not publish it or clear the active controller state.
+    FOC staged;
+    assert(staged.set_angle_point(.3f));
+    staged.foc_target={.torque=.1f};
+    assert(staged.is_foc_point_valid({.torque=.2f,.angle=.1f,.angle_kp=2}));
+    assert(staged.point_type==SetPointType::POSITION && staged.target==.3f && staged.foc_target.torque==.1f);
+    for (auto member : {&FOCTarget::torque,&FOCTarget::angle,&FOCTarget::velocity,
+                        &FOCTarget::angle_kp,&FOCTarget::velocity_kp}) {
+        FOCTarget invalid{};
+        invalid.*member=NAN;
+        assert(!staged.is_foc_point_valid(invalid));
+        assert(!staged.set_foc_point(std::move(invalid)));
+        assert(staged.point_type==SetPointType::POSITION && staged.target==.3f && staged.foc_target.torque==.1f);
+    }
+    staged.drive_runtime_config.user_torque_limit=.05f;
+    assert(!staged.is_foc_point_valid({.torque=.1f}));
+    // A large feedback term must obey the user's torque ceiling, not only Imax.
+    for (float kt : {2.74f,.78f}) {
+        FOC limited;
+        limited.drive_info.torque_const=kt;
+        limited.drive_info.max_current=30;
+        limited.drive_runtime_config.current_limit=2;
+        limited.drive_runtime_config.user_current_limit=2;
+        limited.drive_runtime_config.user_torque_limit=kt==2.74f ? 5.f : 1.4f;
+        for (float sign : {-1.f,1.f}) {
+            const float current=clipped_current(limited,sign*20);
+            near(current*kt,sign*(kt==2.74f ? 5.f : 1.4f));
+            assert(std::fabs(current)<=2);
+        }
+    }
     // Legacy PID overloads retain their behavior, including dynamic-limit I gating.
     PIDRegulator legacy({.kp=2, .ki=4, .kd=3});
     near(legacy.regulation(1.f,.1f),32.4f);
@@ -344,11 +375,16 @@ int main() {
         }
         converted.drive_info.max_torque=.3f;
         converted.drive_runtime_config.current_limit=10;
+        near(clipped_current(converted,1),.4f);
+        near(clipped_current(converted,-1),-.4f);
+        converted.drive_runtime_config.user_torque_limit=.4f;
         near(clipped_current(converted,1),.6f);
         near(clipped_current(converted,-1),-.6f);
         converted.drive_runtime_config.current_limit=.4f;
         near(clipped_current(converted,1),.4f);
         converted.drive_info.max_torque=1000;
+        converted.drive_runtime_config.user_torque_limit=NAN;
+        converted.drive_runtime_config.user_current_limit=NAN;
         converted.drive_runtime_config.current_limit=1000;
         converted.drive_info.max_current=12;
         near(clipped_current(converted,40),12);
