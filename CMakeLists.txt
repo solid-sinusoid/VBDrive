@@ -21,6 +21,11 @@ if(NOT BOOTLOADER_FDCAN_ID_FORMAT MATCHES "^(standard|extended)$")
     message(FATAL_ERROR "BOOTLOADER_FDCAN_ID_FORMAT must be 'standard' or 'extended'")
 endif()
 option(BOOTLOADER_USE_EEPROM_CONFIG "Load VBBoot CAN node id and rates from VBDrive EEPROM config" ON)
+set(FDCAN_TDC_OFFSET_TQ 0 CACHE STRING "FDCAN TDC offset in tq; 0 uses DataTimeSeg1 * DataPrescaler")
+if(NOT FDCAN_TDC_OFFSET_TQ MATCHES "^[0-9]+$" OR FDCAN_TDC_OFFSET_TQ GREATER 63)
+    message(FATAL_ERROR "FDCAN_TDC_OFFSET_TQ must be an integer from 0 through 63")
+endif()
+add_compile_definitions(FDCAN_TDC_OFFSET_TQ=${FDCAN_TDC_OFFSET_TQ})
 
 set(VB_CONFIG_ADDRESS "0" CACHE STRING "Configuration byte address in storage")
 if(NOT VB_CONFIG_ADDRESS MATCHES "^(0[xX][0-9a-fA-F]+|[0-9]+)$")
@@ -135,6 +140,8 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
 
 file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS "App/*.cpp")
 file(GLOB_RECURSE LIBVOLTBRO_SOURCES CONFIGURE_DEPENDS "Drivers/libvoltbro/*.cpp" "Drivers/libvoltbro/*.c")
+# Keep recovery metadata reserved without sacrificing the O3 FOC implementation.
+set_source_files_properties(App/app.cpp App/foc_cycle_sync.cpp PROPERTIES COMPILE_OPTIONS "-Os")
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${USER_SOURCES}
     ${LIBVOLTBRO_SOURCES}
@@ -234,6 +241,7 @@ ExternalProject_Add(VBBoot_firmware
         -DBOOTLOADER_USE_EEPROM_CONFIG=${BOOTLOADER_USE_EEPROM_CONFIG}
         -DLIBVOLTBRO_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Drivers/libvoltbro
         -DVB_CONFIG_ADDRESS=${VB_CONFIG_ADDRESS_VALUE}
+        -DBOOTLOADER_APP_END=0x0801F800UL
     BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --clean-first
     INSTALL_COMMAND ""
     BUILD_ALWAYS TRUE
@@ -256,7 +264,7 @@ add_custom_command(
         -DBOOT_START=0x08000000
         -DBOOT_END=0x08003000
         -DAPP_START=0x08003000
-        -DAPP_END=0x08020000
+        -DAPP_END=0x0801F800
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/merge_vbdrive_hex.cmake
     DEPENDS
         ${CMAKE_PROJECT_NAME}

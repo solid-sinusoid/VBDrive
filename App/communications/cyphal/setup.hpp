@@ -3,6 +3,7 @@
 #include "app.h"
 #include "state_manager/state_manager.h"
 #include "profiling.hpp"
+#include "fdcan_timing.hpp"
 #include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
 #include <cyphal/cyphal.h>
 #include <cyphal/providers/G4CAN.h>
@@ -20,6 +21,8 @@ inline constexpr size_t SHARED_BUFFER_SIZE = std::max(
 inline constexpr millis DELAY_ON_ERROR_MS = 500;
 void setup_subscriptions();
 void in_loop_reporting(millis);
+void publish_foc_statuses();
+void publish_command_status(const CommandStatus&);
 
 FDCAN_HandleTypeDef hfdcan1;
 
@@ -80,7 +83,7 @@ void configure_fdcan(FDCAN_HandleTypeDef* hfdcan) {
     hfdcan->Init.DataTimeSeg1 = 5;
     hfdcan->Init.DataTimeSeg2 = 4;
     hfdcan->Init.StdFiltersNbr = 0;
-    hfdcan->Init.ExtFiltersNbr = 4;
+    hfdcan->Init.ExtFiltersNbr = 5;
     hfdcan->Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
 
     hfdcan->Init.NominalPrescaler = voltbro_can_nominal_prescaler(get_app_manager().get_committed_config().base.fdcan_nominal_baud);
@@ -101,6 +104,33 @@ static millis delay_cyphal_until_millis = 0;
 
 std::shared_ptr<CyphalInterface> get_interface() {
     return cyphal_interface;
+}
+
+uint32_t read_fdcan_diagnostics() {
+    FDCAN_ProtocolStatusTypeDef protocol{};
+    FDCAN_ErrorCountersTypeDef counters{};
+    (void)HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocol);
+    (void)HAL_FDCAN_GetErrorCounters(&hfdcan1, &counters);
+    return pack_fdcan_diagnostics({
+        .tx_error_count = static_cast<uint8_t>(counters.TxErrorCnt),
+        .rx_error_count = static_cast<uint8_t>(counters.RxErrorCnt),
+        .error_logging_count = static_cast<uint8_t>(counters.ErrorLogging),
+        .last_error_code = static_cast<uint8_t>(protocol.LastErrorCode),
+        .data_last_error_code = static_cast<uint8_t>(protocol.DataLastErrorCode),
+        .bus_off = protocol.BusOff != 0U, .error_passive = protocol.ErrorPassive != 0U,
+        .warning = protocol.Warning != 0U, .protocol_exception = protocol.ProtocolException != 0U,
+        .rx_error_passive = counters.RxErrorPassive != 0U});
+}
+
+uint32_t read_fdcan_rx_fifo_diagnostics() {
+    const auto fifo0 = hfdcan1.Instance->RXF0S;
+    const auto fifo1 = hfdcan1.Instance->RXF1S;
+    const auto interrupts = hfdcan1.Instance->IR;
+    return pack_fdcan_rx_fifo_diagnostics({
+        .fifo0_fill_level = static_cast<uint8_t>((fifo0 & FDCAN_RXF0S_F0FL) >> FDCAN_RXF0S_F0FL_Pos),
+        .fifo0_full = (fifo0 & FDCAN_RXF0S_F0F) != 0U, .fifo0_lost = (interrupts & FDCAN_IR_RF0L) != 0U,
+        .fifo1_fill_level = static_cast<uint8_t>((fifo1 & FDCAN_RXF1S_F1FL) >> FDCAN_RXF1S_F1FL_Pos),
+        .fifo1_full = (fifo1 & FDCAN_RXF1S_F1F) != 0U, .fifo1_lost = (interrupts & FDCAN_IR_RF1L) != 0U});
 }
 
 void cyphal_error_handler() {
@@ -163,11 +193,13 @@ void heartbeat() {
 
 __attribute__((hot)) void cyphal_loop() {
     VBDRIVE_PROFILE_COUNT(cyphal_loop_invocations)
+    service_foc_watchdog(); // A transport error must not suspend the control watchdog.
     if (_is_cyphal_on) {
-        cyphal_interface->process_canard_rx(false);
+        cyphal_interface->process_canard_rx();
     }
     if (_is_cyphal_on) {
         millis current_t = millis_32();
+        publish_foc_statuses();
         in_loop_reporting(current_t);
         cyphal_interface->process_canard_tx(false);
 
@@ -213,7 +245,8 @@ void start_cyphal() {
 
     HAL_IMPORTANT(HAL_FDCAN_ConfigTxDelayCompensation(
         &hfdcan1,
-        hfdcan1.Init.DataTimeSeg1 * hfdcan1.Init.DataPrescaler,
+        vbdrive::fdcan::tx_delay_compensation_offset_tq(
+            hfdcan1.Init.DataTimeSeg1, hfdcan1.Init.DataPrescaler, FDCAN_TDC_OFFSET_TQ),
         0
     ))
     HAL_IMPORTANT(HAL_FDCAN_EnableTxDelayCompensation(&hfdcan1))
@@ -247,11 +280,13 @@ void pause_cyphal_for_calibration() {
 void resume_cyphal_after_calibration() {
     cyphal_interface->reset();
     HAL_IMPORTANT(HAL_FDCAN_Start(&hfdcan1))
-    const auto pending = HAL_FDCAN_GetRxFifoFillLevel(&hfdcan1, FDCAN_RX_FIFO0);
-    for (uint32_t i = 0; i < pending; ++i) {
-        FDCAN_RxHeaderTypeDef header{};
-        uint8_t data[64];
-        HAL_IMPORTANT(HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &header, data))
+    for (const uint32_t fifo : {FDCAN_RX_FIFO1, FDCAN_RX_FIFO0}) {
+        const auto pending = HAL_FDCAN_GetRxFifoFillLevel(&hfdcan1, fifo);
+        for (uint32_t i = 0; i < pending; ++i) {
+            FDCAN_RxHeaderTypeDef header{};
+            uint8_t data[64];
+            HAL_IMPORTANT(HAL_FDCAN_GetRxMessage(&hfdcan1, fifo, &header, data))
+        }
     }
     _is_cyphal_on = true;
 }

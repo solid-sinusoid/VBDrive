@@ -3,6 +3,7 @@
 #include "config/config.hpp"
 #include <cstdint>
 #include <string_view>
+#include "disable_diagnostics.hpp"
 
 class UARTResponseAccumulator;
 struct FOCTarget;
@@ -26,7 +27,7 @@ public:
     void set_state(CommandState state);
     bool is_app_running() const;
     bool is_logging() const;
-    ParameterWriteResult set_motor_enabled(bool enabled);
+    ParameterWriteResult set_motor_enabled(bool enabled, MotorDisableReason reason = MotorDisableReason::RegisterStop);
     bool service_temperature();
     void mark_config_changed();
     void persist_pending_config();

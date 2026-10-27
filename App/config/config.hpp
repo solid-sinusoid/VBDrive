@@ -71,7 +71,17 @@ enum class ParameterId : uint8_t {
     RATED_MAX_CURRENT,
     VELOCITY_PLANNING_TOLERANCE,
     MAX_TEMP,
-    RESTART_TEMP
+    RESTART_TEMP,
+    SYNC_MODE,
+    SYNC_VERSION,
+    DIAG_DISABLE,
+    DIAG_CAN,
+    DIAG_CAN_RX_FIFO,
+    SYNC_RUN_PROGRESS,
+    SYNC_RUN_STATUS_PROGRESS,
+    SYNC_COMMAND_PROGRESS,
+    SYNC_STAGED_STATUS_PROGRESS,
+    SYNC_STATUS_QUEUE_PROGRESS
 };
 
 using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view>;
@@ -94,7 +104,7 @@ enum class ParameterWriteResult : uint8_t {
     UNAVAILABLE
 };
 
-inline constexpr std::array<ParameterDefinition, 50> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 60> PARAMETER_CATALOG{{
     {ParameterId::GEAR,          "gear",          ParameterType::NATURAL32, true,  true, ParameterValue{uint32_t{36}}},
     {ParameterId::MAX_I,         "max_i",         ParameterType::REAL32,    true,  true, ParameterValue{float{NAN}}},
     {ParameterId::MAX_SPD,       "max_spd",       ParameterType::REAL32,    true,  true, ParameterValue{float{NAN}}},
@@ -145,6 +155,16 @@ inline constexpr std::array<ParameterDefinition, 50> PARAMETER_CATALOG{{
     {ParameterId::VELOCITY_PLANNING_TOLERANCE, "velocity_planning_tolerance", ParameterType::REAL32, true, true, ParameterValue{float{0.5f}}},
     {ParameterId::MAX_TEMP, "max_temp", ParameterType::REAL32, true, true, ParameterValue{DEFAULT_MAX_STATOR_TEMPERATURE_K}},
     {ParameterId::RESTART_TEMP, "restart_temp", ParameterType::REAL32, true, true, ParameterValue{DEFAULT_RESTART_STATOR_TEMPERATURE_K}},
+    {ParameterId::SYNC_MODE, "sync.mode", ParameterType::NATURAL32, true, true, ParameterValue{uint32_t{1}}},
+    {ParameterId::SYNC_VERSION, "sync.version", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::DIAG_DISABLE, "diag.disable", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::DIAG_CAN, "diag.can", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::DIAG_CAN_RX_FIFO, "diag.can_rx_fifo", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::SYNC_RUN_PROGRESS, "sync.diag.run_progress", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::SYNC_RUN_STATUS_PROGRESS, "sync.diag.run_status_progress", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::SYNC_COMMAND_PROGRESS, "sync.diag.command_progress", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::SYNC_STAGED_STATUS_PROGRESS, "sync.diag.staged_status_progress", ParameterType::NATURAL32, false, false, std::nullopt},
+    {ParameterId::SYNC_STATUS_QUEUE_PROGRESS, "sync.diag.status_queue_progress", ParameterType::NATURAL32, false, false, std::nullopt},
 }};
 
 consteval bool parameter_catalog_is_valid() {
@@ -210,7 +230,7 @@ inline constexpr BaseConfigData BASE_CONFIG_DEFAULTS = [] {
     return config;
 }();
 
-inline constexpr uint32_t VBDRIVE_CONFIG_TYPE_ID = 0x44AAAC05;
+inline constexpr uint32_t VBDRIVE_CONFIG_TYPE_ID = 0x44AAAC06;
 
 struct __attribute__((packed)) VBDriveConfig {
     static constexpr uint32_t TYPE_ID = VBDRIVE_CONFIG_TYPE_ID;
@@ -248,6 +268,7 @@ struct __attribute__((packed)) VBDriveConfig {
     float velocity_planning_tolerance = NAN;
     float max_temp = NAN;
     float restart_temp = NAN;
+    uint8_t sync_mode = parameter_default<uint32_t>(ParameterId::SYNC_MODE);
 
     bool temperature_limits_valid() const;
     void apply_temperature_config() const;

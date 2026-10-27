@@ -87,9 +87,10 @@ struct DriveRuntimeConfig {
 struct FOCTarget { float torque=0,angle=0,velocity=0,angle_kp=0,velocity_kp=0; };
 enum class SetPointType { POSITION, VELOCITY, TORQUE, VOLTAGE };
 struct PIDConfig { float kp=0, ki=0, kd=0; };
+inline void (*temperature_hook)()=nullptr;
 struct VBInverter {
     float mcu=30, stator=25;
-    void update_temperature() {}
+    void update_temperature() {if(auto hook=temperature_hook){temperature_hook=nullptr;hook();}}
     float get_mcu_temperature() const {return mcu;}
     float get_stator_temperature() const {return stator;}
 };
@@ -197,7 +198,7 @@ int main() {
         assert(uart_frames.size()==100);
         for (const auto& frame : uart_frames) assert(frame=="line\r\n");
     }
-    static_assert(sizeof(BaseConfigData)==28 && sizeof(VBDriveConfig)==130 && sizeof(DriveConfig)==158);
+    static_assert(sizeof(BaseConfigData)==28 && sizeof(VBDriveConfig)==131 && sizeof(DriveConfig)==159);
     static_assert(CONFIG_PLACEMENT==0 && CALIBRATION_PLACEMENT==0x100);
     auto& config = manager.get_config();
     for (const auto& definition : PARAMETER_CATALOG) {
@@ -259,7 +260,8 @@ int main() {
         uavcan_register_Value_1_0 in{},out{}; RegisterAccessResponse response{};
         handle_parameter_register(i,in,out,response);
         assert(out._tag_!=REGISTER_EMPTY_TAG);
-        assert(response.persistent==d.is_persistent && response._mutable==d.is_mutable);
+        assert(response.persistent==d.is_persistent);
+        assert(response._mutable==(d.is_mutable && !(d.id==ParameterId::SYNC_MODE && device.on)));
         ParameterValue value; assert(read_parameter(config,d.id,value));
         switch(d.type) {
             case ParameterType::REAL32: { float v; assert(parse_register_real32(out,v)); float want=std::get<float>(value); assert(v==want || (std::isnan(v)&&std::isnan(want))); break; }
@@ -317,7 +319,7 @@ int main() {
     assert(command("ang_off:0.2").find("CONFIG mode required")!=std::string::npos);
     command("STOP"); assert(device.servo_type==3 && device.servo_value==0);
     assert(manager.is_app_running()); command("is_on:0"); assert(!device.on); command("is_on:1");
-    auto access=[&](std::string_view name,uavcan_register_Value_1_0 in) {
+    auto access=[&](std::string_view name,uavcan_register_Value_1_0 in={}) {
         auto* d=find_parameter(name); assert(d);
         uavcan_register_Value_1_0 out{}; RegisterAccessResponse r{};
         handle_parameter_register(d-PARAMETER_CATALOG.data(),in,out,r); return out;
@@ -709,7 +711,7 @@ int main() {
     }
     command("is_on:0");
 
-    assert(PARAMETER_CATALOG.size()==50);
+    assert(PARAMETER_CATALOG.size()==60);
     assert(command("max_temp:?").find("363.149")!=std::string::npos ||
            command("max_temp:?").find("363.150")!=std::string::npos);
     device.inverter.stator=59;
@@ -791,7 +793,62 @@ int main() {
         assert(command("is_on:1")=="is_on:1 OK\r\n" && device.on);
         command("is_on:0");assert(!device.on);
     }
-    puts("PASS: 50 shared registers, planning tolerance persistence/validation, Serial/Cyphal isolation, Servo apply and boot commands");
+    assert(access("sync.version")._tag_==REGISTER_NATURAL32_TAG);
+    assert(access("sync.version").natural32.value.elements[0]==5);
+    assert(access("sync.mode").natural32.value.elements[0]==1);
+    assert(command("is_on:1")=="is_on:1 OK\r\n");
+    fill_register_natural32(input,0);access("sync.mode",input);
+    assert(access("sync.mode").natural32.value.elements[0]==1);
+    command("is_on:0");access("sync.mode",input);
+    assert(access("sync.mode").natural32.value.elements[0]==0 && foc_cycle_sync.mode()==SyncMode::Immediate);
+    manager.persist_pending_config();DriveConfig sync_disk;eeprom.read(&sync_disk,0);
+    ParameterValue saved_mode;
+    assert(read_parameter(sync_disk,find_parameter("sync.mode")->id,saved_mode) && std::get<uint32_t>(saved_mode)==0);
+    fill_register_natural32(input,2);access("sync.mode",input);
+    assert(access("sync.mode").natural32.value.elements[0]==0);
+    fill_register_natural32(input,1);access("sync.mode",input);
+    // Real controller transitions must discard staged motion but retain thermal recovery policy.
+    for(unsigned transition=0;transition<3;++transition) {
+        command("is_on:1");
+        foc_cycle_sync.stage(CycleCommand{.cycle_id=100},true,1000);
+        foc_cycle_sync.on_sync(100,SyncPhase::Run,1000);
+        if(transition==0) command("is_on:0");
+        if(transition==1) {command("CONFIG");command("EXIT");}
+        if(transition==2) {
+            device.inverter.stator=95;manager.service_temperature();
+            device.inverter.stator=25;manager.service_temperature();assert(device.on);
+        }
+        assert(!foc_cycle_sync.consume_armed(1025));
+    }
+    foc_cycle_sync.stage(CycleCommand{.cycle_id=101},true,1000);
+    foc_cycle_sync.on_sync(101,SyncPhase::Run,1000);
+    assert(apply_servo_command(0,.25f,false,0));
+    assert(!foc_cycle_sync.consume_armed(1025));
+    foc_cycle_sync.stage(CycleCommand{.cycle_id=102},true,1000);
+    foc_cycle_sync.on_sync(102,SyncPhase::Run,1000);
+    assert(apply_mit_command({.torque=.1f}));
+    assert(!foc_cycle_sync.consume_armed(1025));
+    command("is_on:0");
+    // A RUN received while OFF must not survive explicit neutral enable.
+    foc_cycle_sync.stage(CycleCommand{.cycle_id=199},true,1000);
+    foc_cycle_sync.on_sync(199,SyncPhase::Run,1000);
+    command("is_on:1");
+    assert(!foc_cycle_sync.consume_armed(1025));
+    foc_cycle_sync.stage(CycleCommand{.cycle_id=200},true,1000);
+    foc_cycle_sync.on_sync(200,SyncPhase::Run,1000);
+    command("is_on:1");assert(foc_cycle_sync.consume_armed(1025));
+    command("is_on:0");
+    command("is_on:1");
+    const auto disable_count=motor_disable_diagnostics.count();
+    foc_cycle_sync.on_sync(101,SyncPhase::Run,1000);
+    test_millis=51;service_foc_watchdog();
+    assert(!device.on && motor_disable_diagnostics.reason()==MotorDisableReason::SyncWatchdog);
+    assert(motor_disable_diagnostics.count()==disable_count+1);
+    command("is_on:1");
+    temperature_hook=[](){get_app_manager().set_motor_enabled(false,MotorDisableReason::InvalidFocPoint);};
+    manager.service_temperature();
+    assert(!device.on); // An IRQ disable during ADC sampling is not a thermal trip to auto-recover.
+    puts("PASS: 60 shared registers, sync mode persistence/OFF gate, session reset, thermal recovery, Serial/Cyphal isolation");
 }
 '''
 
@@ -818,6 +875,17 @@ bool is_able_to_calibrate() {return get_app_manager().get_state()==CommandState:
                                   get_app_manager().get_state()==CommandState::NOT_CALIBRATED;}
 bool do_calibrate() {++calibrations; return true;}
 void reboot_to_bootloader(){++boots;}
+#include "foc_cycle_sync.cpp"
+#include "disable_diagnostics.hpp"
+FocCycleSync foc_cycle_sync{SyncMode::Synchronized};
+MotorDisableDiagnostics motor_disable_diagnostics;
+uint32_t read_fdcan_diagnostics(){return 0;}
+uint32_t read_fdcan_rx_fifo_diagnostics(){return 0;}
+uint64_t micros_64(){return uint64_t(test_millis)*1000;}
+bool _is_cyphal_on=false;
+void publish_foc_statuses(){}
+void publish_command_status(const CommandStatus&){}
+void reset_foc_cycle_session(){CRITICAL_SECTION({foc_cycle_sync.reset_session();})}
 #include "config/config.cpp"
 #include "state_manager/state_manager.cpp"
 #include "communications/serial/setup.hpp"
@@ -827,6 +895,7 @@ void create_motor(VBDriveConfig&) {device.on=false;}
 void apply_calibration() {}
 '''
     app = (ROOT / 'App/app.cpp').read_text()
+    source += app[app.index('void service_foc_watchdog('):app.index('VBDrive* get_motor()')]
     begin = app.index('    setup_cordic();', app.index('void app()'))
     startup = app[begin:app.index('    // Warm up', begin)]
     source += ('\nvoid run_motor_startup(){auto& app_manager=get_app_manager();'

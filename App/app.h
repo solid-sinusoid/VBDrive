@@ -1,6 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include "foc_cycle_sync.hpp"
+#include "disable_diagnostics.hpp"
+
+extern FocCycleSync foc_cycle_sync;
+extern MotorDisableDiagnostics motor_disable_diagnostics;
+void reset_foc_cycle_session();
+void service_foc_watchdog();
+uint32_t read_fdcan_diagnostics();
+uint32_t read_fdcan_rx_fifo_diagnostics();
 
 class VBDrive;
 class EEPROM;

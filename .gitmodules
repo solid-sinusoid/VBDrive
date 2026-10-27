@@ -12,4 +12,4 @@
 	url = git@github.com:solid-sinusoid/cyphal-types.git
 [submodule "VBBoot"]
 	path = VBBoot
-	url = git@github.com:VBCores/VBBoot.git
+	url = git@github.com:solid-sinusoid/VBBoot.git

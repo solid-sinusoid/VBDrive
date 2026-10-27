@@ -29,6 +29,16 @@ void record_invalid_command() {
     const auto& base = data.base;
     value = {};
     switch (id) {
+        case ParameterId::SYNC_MODE: value = uint32_t{config.sync_mode}; return true;
+        case ParameterId::SYNC_VERSION: value = uint32_t{5}; return true;
+        case ParameterId::DIAG_DISABLE: value = motor_disable_diagnostics.packed_state(); return true;
+        case ParameterId::DIAG_CAN: value = read_fdcan_diagnostics(); return true;
+        case ParameterId::DIAG_CAN_RX_FIFO: value = read_fdcan_rx_fifo_diagnostics(); return true;
+        case ParameterId::SYNC_RUN_PROGRESS: value = foc_cycle_sync.run_progress(); return true;
+        case ParameterId::SYNC_RUN_STATUS_PROGRESS: value = uint32_t{foc_cycle_sync.run_status_progress()}; return true;
+        case ParameterId::SYNC_COMMAND_PROGRESS: value = foc_cycle_sync.command_progress(); return true;
+        case ParameterId::SYNC_STAGED_STATUS_PROGRESS: value = foc_cycle_sync.staged_status_progress(); return true;
+        case ParameterId::SYNC_STATUS_QUEUE_PROGRESS: value = foc_cycle_sync.status_queue_progress(); return true;
         case ParameterId::MAX_TEMP: value = value_or_default(config.max_temp, parameter_default<float>(ParameterId::MAX_TEMP)); return true;
         case ParameterId::RESTART_TEMP: value = value_or_default(config.restart_temp, parameter_default<float>(ParameterId::RESTART_TEMP)); return true;
         case ParameterId::SERVO_POS_P_GAIN: value = value_or_default(config.servo_pos_p_gain, parameter_default<float>(ParameterId::SERVO_POS_P_GAIN)); return true;
@@ -332,6 +342,13 @@ void record_invalid_command() {
             if (std::get<uint32_t>(value) > to_underlying(AngleEncoderType::SHAFT)) return ParameterWriteResult::INVALID;
             config.angle_encoder = static_cast<AngleEncoderType>(std::get<uint32_t>(value));
             break;
+        case ParameterId::SYNC_MODE: {
+            const auto mode = std::get<uint32_t>(value);
+            if (mode > 1 || (apply_runtime && get_motor()->is_on())) return ParameterWriteResult::INVALID;
+            config.sync_mode = static_cast<uint8_t>(mode);
+            if (!staged) { CRITICAL_SECTION({ foc_cycle_sync.set_mode(static_cast<SyncMode>(mode)); }) }
+            break;
+        }
         case ParameterId::NODE_ID:
             if (std::get<uint32_t>(value) == 0 || std::get<uint32_t>(value) > 127U) return ParameterWriteResult::INVALID;
             base.node_id = static_cast<uint8_t>(std::get<uint32_t>(value));
@@ -362,7 +379,7 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
 }
 
 bool VBDriveConfig::are_required_params_set(const BaseConfigData& base) const {
-    return base.node_id != 0 && gear_ratio != 0;
+    return base.node_id != 0 && base.node_id <= 127 && gear_ratio != 0 && sync_mode <= 1;
 }
 
 ServoInputConfig VBDriveConfig::servo_input_config() const {
