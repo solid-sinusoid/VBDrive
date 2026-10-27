@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host smoke of actual FOC handler, generated serializers and libcanard framing.
+"""Host smoke of UART motion adapters and historical generated serializer layouts.
 
 Run after building RelWithDebInfo. No hardware access or motion.
 """
@@ -11,7 +11,7 @@ root = Path(__file__).resolve().parents[1]
 app = (root / 'App/communications/cyphal/interface.hpp').read_text()
 state = (root / 'App/state_manager/state_manager.cpp').read_text()
 shared = state[state.index('bool apply_mit_command('):state.index('void reboot_to_bootloader_if_requested')]
-handler = shared + app[app.index('class FOCCommandSub:'):app.index('class ServoSub:')]
+handler = shared
 servo_handler = app[app.index('class ServoSub:'):app.index('// NOTE: underlying CanardRxSubscriptions')]
 source = r'''
 #include <cassert>
@@ -22,6 +22,7 @@ source = r'''
 #include <utility>
 #define VBDRIVE_PROFILE_RESULT(kind, accepted)
 #define VBDRIVE_PROFILE_HANDLER(stats)
+#define CRITICAL_SECTION(code) {code}
 #include <libcanard/canard.h>
 #include <voltbro/foc/command_1_0.h>
 #include <voltbro/foc/MIT_1_0.h>
@@ -62,6 +63,7 @@ struct AppManager {bool is_app_running(){return app_running;}} manager;
 auto& get_app_manager(){return manager;}
 int errors=0;
 void record_invalid_command() {++errors;}
+void reset_foc_cycle_session() {}
 '''+handler+servo_handler+r'''
 int main() {
     ServoSub servo_sub(0,3418);
@@ -91,10 +93,9 @@ int main() {
         assert(decoded.command_idx.count==1 && decoded.command_idx.elements[0]==255);
     }
     device=Motor{}; device.valid=false; errors=0;
-    servo_sub.handler({},nullptr); assert(errors==1);
+    servo_sub.handler({},nullptr);assert(errors==1);
     static_assert(voltbro_foc_command_1_0_EXTENT_BYTES_==28);
     static_assert(voltbro_foc_MIT_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_==20);
-    FOCCommandSub sub(0,2118);
     for (size_t mtu : {8,12,16,20,24,32,48,64}) {
         // New publisher -> old subscriber: retain the four-field prefix.
         voltbro_foc_State_1_0 state{};
@@ -183,7 +184,8 @@ int main() {
                     assert(transfer.payload_size==20);
                     assert(voltbro_foc_MIT_1_0_deserialize_(&decoded,
                         static_cast<const uint8_t*>(transfer.payload),&n)==0);
-                    sub.handler(decoded,&transfer);
+                    assert(apply_mit_command({decoded._torq.newton_meter,decoded.pos.radian,
+                        decoded.vel.radian_per_second,decoded.pos_gain.value,decoded.vel_gain.value}));
                     std::printf("MTU=%zu %s received=%zu\n",mtu,old?"legacy":"MIT",transfer.payload_size);
                     release(&rx,transfer.payload);
                 }
@@ -197,9 +199,9 @@ int main() {
         }
     }
     device=Motor{}; device.valid=false; errors=0;
-    sub.handler({},nullptr);
-    assert(errors==1 && device.gains==0);
-    puts("PASS: MIT/legacy wire prefix, Classic CAN and CAN FD, legacy tail ignored, invalid target counted");
+    assert(!apply_mit_command({}));
+    assert(device.gains==0);
+    puts("PASS: CAN Servo handler, UART MIT/Servo adapters and historical wire layouts; MIT is not the active CAN command API");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='vbdrive-mit-') as directory:

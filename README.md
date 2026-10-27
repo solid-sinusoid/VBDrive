@@ -93,6 +93,63 @@ disabled until an explicit `is_on=1`. Cooling down after a hot startup does not
 enable it. Automatic thermal recovery still applies to a motor that was already
 enabled before its thermal trip; explicit `is_on=0` cancels that recovery.
 
+### Synchronization protocol
+
+This integration uses command.2.0 on `2300 + node_id`, phased sync.2.0 on
+`3809` (master node `42`), command_status.1.0 on `3810` and the extended
+state_simple.1.0 on `3811`. These command ports no longer accept MIT.1.0 or
+command.1.0. The existing CAN Servo subscription, Serial MIT/Servo commands and
+the upstream Servo generators remain available. A successful Servo command
+resets any pending synchronized cycle so it cannot later replace the Servo target.
+
+CAN FD padding makes legacy command.1.0 (28 bytes) and command.2.0 (30 bytes)
+indistinguishable by length. The old subject `2107 + node_id` is therefore not
+subscribed; client and firmware must both use the new subject. The host regression
+reproduces the ambiguity and separately checks the production filters.
+
+| Name | Type | Default |
+| --- | --- | --- |
+| `sync.mode` | natural32 | 1 |
+
+`sync.mode=1` stages targets until RUN; `0` applies the same command.2.0 at the
+next control IRQ. The persistent mode can change only while OFF and resets the
+cycle session. Read-only `sync.version` is natural32 `5`. PREPARE acknowledges
+readiness without changing the target or enabling the bridge. RUN requires an
+explicitly enabled, thermally healthy motor. OFF→ON clears the sync session;
+the client must stage a fresh command after enabling before RUN. RUN watchdog is 50 ms; PREPARE
+watchdog is 250 ms. Watchdog OFF cancels thermal recovery intent. OFF, CONFIG,
+calibration and thermal trips discard pending synchronized commands.
+
+State telemetry is one fresh sample every 5 ms, without catch-up bursts. It
+includes position, velocity, output-shaft torque, working current, bus voltage
+and Kelvin temperatures. Current and torque report zero while OFF. The downward
+stator-temperature slope limit affects telemetry only, never thermal protection.
+Critical STAGED/APPLIED messages are sent independently of this schedule.
+
+Diagnostics are read-only natural32: `diag.disable`, `diag.can`,
+`diag.can_rx_fifo`, `sync.diag.run_progress`, `sync.diag.run_status_progress`,
+`sync.diag.command_progress`, `sync.diag.staged_status_progress` and
+`sync.diag.status_queue_progress`. Counter packing is defined in
+`App/disable_diagnostics.hpp` and `App/foc_cycle_sync.hpp`.
+
+The packed application configuration adds the mode byte (ABI `0x44AAAC06`,
+159 bytes including BaseConfigData). At startup a read-only guard rejects unknown,
+legacy or partially initialized EEPROM before configuration saving or sensor
+programming. A completely erased used area is treated as a new device; an existing
+current-layout device requires a valid inductive sensor record. Unsupported data is
+left unchanged and the application halts with a Serial warning. Legacy data is not
+automatically migrated. Back up the complete EEPROM and prove the correct calibration
+conversion before planning a transition or rollback. **Do not flash this in-progress
+integration.**
+
+The existing EEPROM records have no whole-record checksum. Matching type IDs and
+range checks cannot detect arbitrary bit damage or prove physical calibration
+validity; preserving an unknown image is not the same as validating a known one.
+
+GetInfo `software_image_crc` contains CRC-64/ECMA-182 computed at startup from the
+entire application Flash range `[0x08003000, 0x0801F800)`, including erased bytes and
+the manifest; it is not a cryptographic signature or a configuration identity.
+
 ### Servo Parameters
 
 Servo parameters are shared Serial/Cyphal read/write persistent registers:

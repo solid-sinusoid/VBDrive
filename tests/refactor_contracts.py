@@ -70,8 +70,8 @@ int main() {
  assert(!m.get_config().are_required_params_set());
  assert(m.get_config().app.gear_ratio==0);
  assert(parameter_default<uint32_t>(ParameterId::GEAR)==36);
- assert(VBDriveConfig::TYPE_ID==0x44AAAC05);
- assert(sizeof(VBDriveConfig)==130 && sizeof(DriveConfig)==158);
+ assert(VBDriveConfig::TYPE_ID==0x44AAAC06);
+ assert(sizeof(VBDriveConfig)==131 && sizeof(DriveConfig)==159);
  assert(parameter_default<float>(ParameterId::MAX_TEMP)==363.15f);
  assert(parameter_default<float>(ParameterId::RESTART_TEMP)==333.15f);
  assert(m.save() && e.writes==1);
@@ -137,6 +137,18 @@ int main() {
 }
 '''
 
+manifest = r'''
+#include <cassert>
+#include "config/config.hpp"
+#include "firmware_manifest.cpp"
+int main() {
+ assert(firmware_manifest.magic==0x50414256);
+ assert(firmware_manifest.header_size==32);
+ assert(firmware_manifest.config_abi==VBDriveConfig::TYPE_ID);
+ assert(firmware_manifest.app_start==0x08003000 && firmware_manifest.app_end==0x0801F800);
+}
+'''
+
 boot = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -196,6 +208,7 @@ with tempfile.TemporaryDirectory(prefix='vbdrive-contracts-') as directory:
         ('boot-0', '#define VB_CONFIG_ADDRESS 0\n'+boot, 'cc', 'c11', 'c'),
         ('boot-40', '#define VB_CONFIG_ADDRESS 0x40\n'+boot, 'cc', 'c11', 'c'),
         ('boot-3000', '#define VB_CONFIG_ADDRESS 0x3000\n'+boot, 'cc', 'c11', 'c'),
+        ('manifest', manifest, 'c++', 'c++20', 'cpp'),
     ):
         path = tmp / (name + '.' + extension)
         path.write_text(source)

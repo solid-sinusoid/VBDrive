@@ -315,11 +315,14 @@ void USART2_IRQHandler(void)
 void TIM7_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM7_IRQn 0 */
-
+  /* HAL clears UIF before its callback updates the epoch; TIM1 must not see
+     the intervening state when it timestamps an applied synchronized command. */
+  const uint32_t previous_mask = __get_PRIMASK();
+  __disable_irq();
   /* USER CODE END TIM7_IRQn 0 */
   HAL_TIM_IRQHandler(&htim7);
   /* USER CODE BEGIN TIM7_IRQn 1 */
-
+  __set_PRIMASK(previous_mask);
   /* USER CODE END TIM7_IRQn 1 */
 }
 

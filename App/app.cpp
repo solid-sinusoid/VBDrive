@@ -12,6 +12,7 @@
 #include "config/config.hpp"
 #include "state_manager/state_manager.h"
 #include "profiling.hpp"
+#include "monotonic_micros.hpp"
 #include "communications/serial/setup.hpp"
 #include "communications/cyphal/setup.hpp"
 #include "communications/cyphal/interface.hpp"
@@ -26,6 +27,7 @@
 #include <voltbro/eeprom/eeprom.hpp>
 #include <voltbro/encoders/ASxxxx/AS5047P.hpp>
 #include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
+#include "eeprom_guard.hpp"
 #include <voltbro/utils.hpp>
 #include "stm32g4xx_hal_tim.h"
 
@@ -98,6 +100,33 @@ VBInverter motor_inverter(&hadc1, &hadc2);
 alignas(4) static CalibrationData calibration_data;  // avoid stack overflow and misalignment issues for I2C EEPROM
 static std::aligned_storage_t<sizeof(VBDrive), alignof(VBDrive)> motor_storage;
 static VBDrive* motor = nullptr;
+FocCycleSync foc_cycle_sync{SyncMode::Synchronized};
+MotorDisableDiagnostics motor_disable_diagnostics;
+
+void reset_foc_cycle_session() {
+    CRITICAL_SECTION({ foc_cycle_sync.reset_session(); })
+}
+
+void service_foc_watchdog() {
+    WatchdogAction action;
+    std::optional<CommandStatus> timeout;
+    CRITICAL_SECTION({
+        action = foc_cycle_sync.poll_watchdog(micros_64());
+        if (action == WatchdogAction::Disable) {
+            for (unsigned count = 0; count < 8; ++count) {
+                const auto status = foc_cycle_sync.pop_status();
+                if (!status) break;
+                if (status->status == StatusCode::Timeout) timeout = status;
+            }
+            // Stop before releasing IRQs: an already armed command must not
+            // run between watchdog expiry and disabling the bridge.
+            get_app_manager().set_motor_enabled(false, MotorDisableReason::SyncWatchdog);
+        }
+    })
+    // OFF clears the session; emit its saved timeout only after the bridge is stopped.
+    if (timeout && _is_cyphal_on) publish_command_status(*timeout);
+}
+
 VBDrive* get_motor() {
     return motor;
 }
@@ -243,6 +272,12 @@ void app() {
     profile_mark_stack();
     start_timers();
     eeprom.wait_until_available();
+    if (!eeprom_layout_safe(eeprom)) {
+        // Never enter ConfigManager or initialize the inductive sensor on an
+        // unknown layout: both paths can otherwise overwrite irreplaceable data.
+        serial_send_message("EEPROM layout unsupported; no writes\r\n");
+        while (true) { HAL_Delay(1000); }
+    }
     auto& app_manager = get_app_manager();
     app_manager.init();
     start_uart_recv_it();
@@ -323,7 +358,11 @@ void reboot_to_bootloader() {
     __HAL_RCC_PWR_CLK_ENABLE();
     HAL_PWR_EnableBkUpAccess();
     TAMP->BKP0R = BOOT_REQUEST_MAGIC;
-    TAMP->BKP1R = 0U;
+    const auto& base = get_app_manager().get_committed_config().base;
+    TAMP->BKP1R = (get_app_manager().get_node_id() & 0x7ffU) |
+        (uint32_t{voltbro_can_nominal_prescaler(base.fdcan_nominal_baud)} << 11U) |
+        (uint32_t{voltbro_can_data_prescaler(base.fdcan_data_baud)} << 19U) |
+        (1UL << 27U) | (1UL << 28U);
     TAMP->BKP2R = 0U;
     HAL_PWR_DisableBkUpAccess();
 
@@ -333,14 +372,35 @@ void reboot_to_bootloader() {
 
 // Volatile is absolutely required here due to timer interrupt
 // Otherwise HAL_Delay() will not work
-static volatile uint32_t millis_k __attribute__ ((__aligned__(4))) = 0;
+static volatile uint64_t millis_k __attribute__ ((__aligned__(8))) = 0;
 
-extern "C" __attribute__((hot)) void main_callback() {
+extern "C" __attribute__((hot, optimize("O3"))) void main_callback() {
     auto& app_manager = get_app_manager();
     const auto sample = profile_main_begin();
     // Service operations pause motor updates while thread mode changes hardware/config.
     if (app_manager.is_app_running() && !serial_deferred) {
-        if (auto motor = get_motor()) motor->update();
+        if (auto motor = get_motor()) {
+            if (const auto applied = foc_cycle_sync.consume_armed(micros_64())) {
+                const auto& target = applied->command.target;
+                bool accepted = motor->get_status() == VBDriveStatus::NOMINAL;
+                if (applied->phase == SyncPhase::Run) {
+                    const bool enabled = accepted && motor->is_on();
+                    accepted = enabled && motor->set_foc_point(FOCTarget{
+                        .torque = target.torque, .angle = target.angle, .velocity = target.velocity,
+                        .angle_kp = target.angle_kp, .velocity_kp = target.velocity_kp});
+                    if (accepted) {
+                        motor->set_current_regulator_params(applied->command.current_kp, applied->command.current_ki);
+                    } else if (enabled) {
+                        app_manager.set_motor_enabled(false, MotorDisableReason::InvalidFocPoint);
+                    }
+                }
+                // PREPARE validates the barrier without energizing or changing the target.
+                foc_cycle_sync.complete_apply(*applied, accepted);
+            }
+            motor->update();
+        }
+    } else if (!serial_deferred) {
+        reset_foc_cycle_session();
     }
     profile_main_end(sample);
 }
@@ -348,15 +408,22 @@ extern "C" __attribute__((hot)) void main_callback() {
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM7) {
         // <'++'/'+='/... expression of 'volatile'-qualified type is deprecated> - C++20
-        millis_k = millis_k + 1;
+        CRITICAL_SECTION({ millis_k = millis_k + 1; })
         profile_millisecond();
     } else if (htim->Instance == TIM2) {
         HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
     }
 }
 
-micros __attribute__((optimize("O0"))) micros_64() {
-    return ((micros)millis_32() * 1000u) + __HAL_TIM_GetCounter(&htim7);
+micros __attribute__((hot)) micros_64() {
+    micros snapshot;
+    CRITICAL_SECTION({
+        const auto counter_before = __HAL_TIM_GetCounter(&htim7);
+        const bool pending = __HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) != RESET;
+        const auto counter_after = __HAL_TIM_GetCounter(&htim7);
+        snapshot = compose_micros_snapshot(millis_k, counter_before, pending, counter_after);
+    })
+    return snapshot;
 }
 
 micros system_time() {
@@ -371,15 +438,18 @@ void start_timers() {
 }
 
 millis millis_32() {
-    if (__HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) == RESET) return millis_k;
     millis value;
+    if (__HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) == RESET) {
+        CRITICAL_SECTION({ value = static_cast<millis>(millis_k); })
+        return value;
+    }
     // The TIM7 IRQ or a higher-priority poller may consume this tick before entry.
     CRITICAL_SECTION({
         if (__HAL_TIM_GET_FLAG(&htim7, TIM_FLAG_UPDATE) != RESET) {
             __HAL_TIM_CLEAR_FLAG(&htim7, TIM_FLAG_UPDATE);
             millis_k = millis_k + 1;
         }
-        value = millis_k;
+        value = static_cast<millis>(millis_k);
     })
     return value;
 }

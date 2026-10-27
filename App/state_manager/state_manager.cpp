@@ -16,14 +16,18 @@ CommandState DriveStateController::get_state() const { return app_state; }
 bool DriveStateController::is_app_running() const { return app_state == CommandState::RUNNING; }
 bool DriveStateController::is_logging() const { return is_app_running() && logging; }
 
-ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled) {
+ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled, MotorDisableReason reason) {
     auto motor = get_motor();
     if (!motor) return ParameterWriteResult::UNAVAILABLE;
     if (enabled && !is_app_running()) return ParameterWriteResult::INVALID;
     if (!enabled) {
         restore_motor_enable = false;
+        motor_disable_diagnostics.record(reason);
+        reset_foc_cycle_session();
         motor->reset_servo_input();
     } else {
+        // Enabling is neutral; commands staged while OFF cannot survive it.
+        if (!motor->is_on()) reset_foc_cycle_session();
         if (!service_temperature()) return ParameterWriteResult::INVALID;
         if (motor->get_status() != VBDriveStatus::NOMINAL) return ParameterWriteResult::INVALID;
     }
@@ -34,9 +38,16 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled) {
     auto motor = get_motor();
     if (!motor) return true;
     VBDRIVE_PROFILE_HANDLER(temperature_service_timing);
+    const auto disable_count = motor_disable_diagnostics.count();
     const bool was_on = motor->is_on();
     motor->update_thermal_protection();
-    if (was_on && !motor->is_on()) restore_motor_enable = true;
+    CRITICAL_SECTION({
+        // A concurrent explicit/IRQ OFF is not thermal recovery intent.
+        if (was_on && !motor->is_on() && motor_disable_diagnostics.count() == disable_count) {
+            restore_motor_enable = true;
+            reset_foc_cycle_session();
+        }
+    })
     if (restore_motor_enable && is_app_running() && motor->get_status() == VBDriveStatus::NOMINAL) {
         if (motor->start() != HAL_OK) {
             if (motor->get_status() == VBDriveStatus::NOMINAL) restore_motor_enable = false;
@@ -48,7 +59,10 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled) {
 }
 
 void DriveStateController::set_state(CommandState state) {
-    if (state != CommandState::RUNNING) logging = false;
+    if (state != CommandState::RUNNING) {
+        logging = false;
+        reset_foc_cycle_session();
+    }
     app_state = state;
 }
 
@@ -106,6 +120,7 @@ void DriveStateController::process_command(std::string_view command, UARTRespons
     }
     if (command == "HELP") { serial_print_help(responses); return; }
     if (command == "STOP") {
+        reset_foc_cycle_session();
         if (auto motor = get_motor()) {
             motor->reset_servo_input();
             motor->set_voltage_point(0.0f);
@@ -205,6 +220,7 @@ void DriveStateController::process_command(std::string_view command, UARTRespons
                 ? CommandState::NOT_CALIBRATED : CommandState::RUNNING);
             configs.get_config().app.apply_servo_config();
             configs.get_config().app.apply_temperature_config();
+            CRITICAL_SECTION({ foc_cycle_sync.set_mode(static_cast<SyncMode>(configs.get_config().app.sync_mode)); })
             if (!service_temperature()) {
                 responses.append("SAVE ERROR: driver enable failed; config saved\r\n");
                 return;
@@ -219,14 +235,24 @@ void DriveStateController::process_command(std::string_view command, UARTRespons
 bool apply_mit_command(FOCTarget target) {
     if (!get_app_manager().is_app_running()) return false;
     auto motor = get_motor();
-    return motor && motor->get_status() == VBDriveStatus::NOMINAL && motor->set_foc_point(std::move(target));
+    if (!motor || motor->get_status() != VBDriveStatus::NOMINAL) return false;
+    bool accepted;
+    CRITICAL_SECTION({
+        accepted = motor->set_foc_point(std::move(target));
+        if (accepted) reset_foc_cycle_session();
+    })
+    return accepted;
 }
 
 bool apply_servo_command(uint8_t type, float value, bool indexed, uint8_t index) {
     if (!get_app_manager().is_app_running()) return false;
     auto motor = get_motor();
     if (!motor || motor->get_status() != VBDriveStatus::NOMINAL) return false;
-    const bool accepted = motor->set_servo_command(type, value, indexed, index);
+    bool accepted;
+    CRITICAL_SECTION({
+        accepted = motor->set_servo_command(type, value, indexed, index);
+        if (accepted) reset_foc_cycle_session();
+    })
     VBDRIVE_PROFILE_RESULT(servo, accepted)
     return accepted;
 }
