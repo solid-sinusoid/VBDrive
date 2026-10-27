@@ -26,7 +26,8 @@ public:
   ++writes;memcpy(bytes.data()+address,in,sizeof(T));return 0;
  }
 };
-struct CalibrationData { static constexpr uint32_t TYPE_ID=0x89ABCDF0; };
+__PRODUCTION_CALIBRATION__
+static_assert(offsetof(CalibrationData,type_id)==8 && sizeof(CalibrationData)==8204);
 struct InductiveSensor {struct State {static constexpr uint32_t TYPE_ID=0xAAAAAA99;};};
 #include "eeprom_guard.hpp"
 EEPROM eeprom;
@@ -38,7 +39,8 @@ int main(){
  EEPROM e;e.bytes.fill(0xff);
  assert(eeprom_layout_safe(e));assert(e.writes==0);
  // A historical calibration starts at zero and overlaps the new config.
- uint32_t legacy=0x89ABCDEF;memcpy(e.bytes.data(),&legacy,4);
+ CalibrationData legacy;legacy.reset();legacy.was_calibrated=true;
+ legacy.type_id=0x89ABCDEF;memcpy(e.bytes.data(),&legacy,sizeof(legacy));
  auto before=e.bytes;assert(!eeprom_layout_safe(e));assert(e.bytes==before && e.writes==0);
  // Blank config cannot grant permission to touch an unknown pre-existing sensor record.
  e.bytes.fill(0xff);uint32_t unknown=0x1234;memcpy(e.bytes.data()+0x2200,&unknown,4);
@@ -48,8 +50,14 @@ int main(){
  cfg.base.node_id=1;cfg.app.gear_ratio=36;memcpy(e.bytes.data(),&cfg,sizeof(cfg));
  uint32_t sensor=0xAAAAAA99;memcpy(e.bytes.data()+0x2200,&sensor,4);
  e.bytes[0x2204]=1;
- uint32_t calibration=0x89ABCDF0;memcpy(e.bytes.data()+0x100,&calibration,4);
+ CalibrationData calibration;calibration.reset();calibration.was_calibrated=true;
+ memcpy(e.bytes.data()+0x100,&calibration,sizeof(calibration));
  assert(eeprom_layout_safe(e));
+ before=e.bytes;
+ uint32_t wrong=0x89ABCDEF;
+ memcpy(e.bytes.data()+0x100+offsetof(CalibrationData,type_id),&wrong,4);
+ assert(!eeprom_layout_safe(e));assert(e.writes==0);
+ e.bytes=before;
  // The firmware writes this record only after successful programming; a
  // persisted false flag must not cause automatic reprogramming of the sensor.
  e.bytes[0x2204]=0;before=e.bytes;
@@ -62,16 +70,18 @@ int main(){
  e.bytes[0x200d]=0;assert(!eeprom_layout_safe(e));
  e.bytes.fill(0xff);memcpy(e.bytes.data(),&cfg,sizeof(cfg));
  memcpy(e.bytes.data()+0x2200,&sensor,4);e.bytes[0x2204]=1;
- memcpy(e.bytes.data()+0x100,&legacy,4);before=e.bytes;
+ memcpy(e.bytes.data()+0x100,&legacy,sizeof(legacy));before=e.bytes;
  assert(!eeprom_layout_safe(e));assert(e.bytes==before && e.writes==0);
  e.fail=true;assert(!eeprom_layout_safe(e));
- eeprom.bytes.fill(0xff);memcpy(eeprom.bytes.data(),&legacy,4);
+ eeprom.bytes.fill(0xff);memcpy(eeprom.bytes.data(),&legacy,sizeof(legacy));
  before=eeprom.bytes;
  try {startup_guard();assert(false);} catch(const std::runtime_error&){}
  assert(warned && eeprom.writes==0 && eeprom.bytes==before);
 }
 '''
 app=(root/'App/app.cpp').read_text()
+calibration=(root/'Drivers/libvoltbro/voltbro/motors/bldc/foc/foc.hpp').read_text()
+source=source.replace('__PRODUCTION_CALIBRATION__',calibration[calibration.index('#define USE_CALIBRATION_ARRAY'):calibration.index('struct FOCTarget')])
 begin=app.index('    eeprom.wait_until_available();',app.index('void app()'))
 end=app.index('    auto& app_manager =',begin)
 source=source.replace('__PRODUCTION_STARTUP_GUARD__','void startup_guard(){\n'+app[begin:end]+'}\n')
