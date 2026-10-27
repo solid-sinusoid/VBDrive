@@ -46,11 +46,13 @@ struct FDCAN_TxHeaderTypeDef {
  FDFormat,TxEventFifoControl,MessageMarker;
 };
 constexpr unsigned FDCAN_EXTENDED_ID=0,FDCAN_DATA_FRAME=0,FDCAN_ESI_ACTIVE=0,
- FDCAN_BRS_ON=0,FDCAN_FD_CAN=0,FDCAN_STORE_TX_EVENTS=0,HAL_OK=0;
+ FDCAN_BRS_ON=0,FDCAN_FD_CAN=0,FDCAN_STORE_TX_EVENTS=1,FDCAN_NO_TX_EVENTS=0,HAL_OK=0;
 unsigned CanardFDCANLengthToDLC[65]{};
-unsigned free_slots=3,added=0;
+unsigned free_slots=3,added=0,stored_events=0;
 unsigned HAL_FDCAN_GetTxFifoFreeLevel(void*) {return free_slots;}
-int HAL_FDCAN_AddMessageToTxFifoQ(void*,FDCAN_TxHeaderTypeDef*,uint8_t*) {++added;return 0;}
+int HAL_FDCAN_AddMessageToTxFifoQ(void*,FDCAN_TxHeaderTypeDef* header,uint8_t*) {
+ ++added;stored_events+=header->TxEventFifoControl;return 0;
+}
 struct G4CAN {void* handler=nullptr; int write_frame(const CanardTxQueueItem*);};
 '''+body(provider,'void AbstractCANProvider::process_canard_tx(')+body(g4,'int G4CAN::write_frame(')+fifo_functions+r'''
 int main() {
@@ -65,12 +67,18 @@ int main() {
  p.queue.size=3;p.busy=true;p.process_canard_tx(false);assert(p.queue.size==3);
  p.busy=false;item.tx_deadline_usec=1;p.process_canard_tx(false);
  assert(p.queue.size==2); // Expired frames also obey the per-pass budget.
- G4CAN g;free_slots=2;assert(g.write_frame(&item)<0 && added==0);
- free_slots=3;assert(g.write_frame(&item)>=0 && added==1);
+  G4CAN g;free_slots=0;assert(g.write_frame(&item)<0 && added==0);
+  for (unsigned available=1;available<=3;++available) {
+    free_slots=available;assert(g.write_frame(&item)>=0 && added==available);
+  }
+  assert(stored_events==0); // No completion events are consumed by the application.
 }
 '''
-with tempfile.TemporaryDirectory(prefix='vbdrive-tx-') as d:
-    p=Path(d);(p/'test.cpp').write_text(source)
-    subprocess.run(['c++','-std=c++20',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
-    subprocess.run([str(p/'test')],check=True)
+for implementation in ('cyphal/providers/G4CAN.cpp', 'src/cyphal.cpp'):
+    code=(root/'Drivers/libcxxcanard'/implementation).read_text()
+    case=source.replace(body(g4,'int G4CAN::write_frame('),body(code,'int G4CAN::write_frame('))
+    with tempfile.TemporaryDirectory(prefix='vbdrive-tx-') as d:
+        p=Path(d);(p/'test.cpp').write_text(case)
+        subprocess.run(['c++','-std=c++20',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+        subprocess.run([str(p/'test')],check=True)
 print('PASS: bounded TX, expiry, busy FIFO, default do-all, RX overwrite wrap')

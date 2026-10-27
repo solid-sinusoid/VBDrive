@@ -16,7 +16,8 @@ required. They do not establish physical motor behavior or MCU timing.
 | `python3 tests/refactor_contracts.py` | Shared C/C++ configuration ABI, storage addresses, independent schema validation, staging, VBBoot baud/config loading, profiling counters and README defaults. |
 | `python3 tests/mit_control.py` | Supported 20/28-byte MIT payloads and State serialization across CAN MTUs. |
 | `python3 tests/kalman_filter.py` | Observer initialization, instance isolation, wrap/tracking and shaft angle from the encoder before filtering. |
-| `python3 tests/cyphal_tx.py` | Bounded/full servicing, TX expiry, busy hardware FIFO and RX overwrite wrap. |
+| `python3 tests/cyphal_tx.py` | Bounded/full servicing, TX expiry, available/full hardware FIFO, disabled TX event storage and RX overwrite wrap; native and bundled providers. |
+| `python3 tests/cyphal_rx.py` | Critical FIFO priority, bounded processing on a continuously replenished bus, single-frame API and HAL receive failures; native and bundled providers. |
 | `python3 tests/control_counters.py` | Production counters-only recording, accepted/rejected totals, one-second timestamps and ring wrap. |
 | `python3 tests/pwm_foc_sync.py` | TIM1 compare IRQ gating, PWM/FOC phase configuration, shaft encoder ordering and cadence in ON/OFF/bootstrap. |
 | `python3 tests/millis_clock.py` | Millisecond polling/IRQ interleaving, single consumption of a timer tick, interrupt mask preservation and timestamp wrap. |

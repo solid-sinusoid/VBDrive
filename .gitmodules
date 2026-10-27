@@ -3,7 +3,7 @@
 	url = git@github.com:VBCores/libvoltbro.git
 [submodule "Drivers/libcxxcanard"]
 	path = Drivers/libcxxcanard
-	url = git@github.com:VBCores/libcxxcanard.git
+	url = git@github.com:solid-sinusoid/libcxxcanard.git
 [submodule "Drivers/cyphal_types/public_regulated_data_types"]
 	path = Drivers/cyphal_types/public_regulated_data_types
 	url = git@github.com:OpenCyphal/public_regulated_data_types.git
