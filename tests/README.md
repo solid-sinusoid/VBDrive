@@ -15,6 +15,7 @@ required. They do not establish physical motor behavior or MCU timing.
 | `python3 tests/parameter_interfaces.py` | Production configuration, Serial controller and Cyphal register adapter: 50 registers, defaults, staging, persistence, shared command dispatch and FIFO framing. |
 | `python3 tests/refactor_contracts.py` | Shared C/C++ configuration ABI, storage addresses, independent schema validation, staging, VBBoot baud/config loading, profiling counters and README defaults. |
 | `python3 tests/mit_control.py` | Supported 20/28-byte MIT payloads and State serialization across CAN MTUs. |
+| `python3 tests/sync_wire.py` | Generated command2, PREPARE/RUN sync2 and status1 serializers against independent wire vectors (requires Release DSDL headers). |
 | `python3 tests/kalman_filter.py` | Observer initialization, instance isolation, wrap/tracking and shaft angle from the encoder before filtering. |
 | `python3 tests/cyphal_tx.py` | Bounded/full servicing, TX expiry, available/full hardware FIFO, disabled TX event storage and RX overwrite wrap; native and bundled providers. |
 | `python3 tests/cyphal_rx.py` | Critical FIFO priority, bounded processing on a continuously replenished bus, single-frame API and HAL receive failures; native and bundled providers. |
