@@ -78,6 +78,13 @@ int main(){
    const auto old=canardMakeFilterForSubject(2107+old_node);
    assert((fresh.extended_can_id & fresh.extended_mask) !=
           (old.extended_can_id & fresh.extended_mask));
+   const CanardFilter other_filters[]{
+    canardMakeFilterForSubject(FOC_SYNC_PORT),
+    canardMakeFilterForSubject(SERVO_PORT+new_node),
+    canardMakeFilterForService(384,new_node),
+    canardMakeFilterForService(430,new_node)};
+   for(const auto& f:other_filters)
+    assert((f.extended_can_id & f.extended_mask) != (old.extended_can_id & f.extended_mask));
   }
 }
 '''
