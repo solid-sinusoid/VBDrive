@@ -88,6 +88,11 @@ current-controller integrals, while MCU power remains active. Position/velocity 
 Repeated `1` while enabled preserves the active mode and target. Commands
 received while disabled never resume automatically on enable.
 
+After power-on or any application reset (including `APPLY`), the bridge remains
+disabled until an explicit `is_on=1`. Cooling down after a hot startup does not
+enable it. Automatic thermal recovery still applies to a motor that was already
+enabled before its thermal trip; explicit `is_on=0` cancels that recovery.
+
 ### Servo Parameters
 
 Servo parameters are shared Serial/Cyphal read/write persistent registers:

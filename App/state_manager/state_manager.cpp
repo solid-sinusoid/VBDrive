@@ -47,11 +47,6 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled) {
     return true;
 }
 
-void DriveStateController::request_startup_enable() {
-    restore_motor_enable = is_app_running();
-    service_temperature();
-}
-
 void DriveStateController::set_state(CommandState state) {
     if (state != CommandState::RUNNING) logging = false;
     app_state = state;

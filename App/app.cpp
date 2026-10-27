@@ -273,7 +273,6 @@ void app() {
     setup_cordic();
     create_motor(config_data.app);
     apply_calibration();
-    app_manager.request_startup_enable();
     motor->set_foc_point(FOCTarget{0});
 
     // Warm up

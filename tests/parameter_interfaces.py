@@ -781,9 +781,16 @@ int main() {
     manager.set_state(CommandState::NOT_CALIBRATED);command("CONFIG");command("SAVE");
     assert(manager.get_state()==CommandState::NOT_CALIBRATED && !device.on);
     manager.set_state(CommandState::RUNNING);
-    device.inverter.stator=95;manager.request_startup_enable();assert(!device.on);
-    device.inverter.stator=59;manager.service_temperature();assert(device.on);
-    command("is_on:0");
+    for (bool hot_start : {false,true}) {
+        device.inverter.stator=hot_start ? 95 : 25;
+        run_motor_startup();
+        assert(!device.on);
+        manager.service_temperature();assert(!device.on);
+        device.inverter.stator=25;manager.service_temperature();assert(!device.on);
+        assert(apply_mit_command({.torque=.1f}));assert(!device.on);
+        assert(command("is_on:1")=="is_on:1 OK\r\n" && device.on);
+        command("is_on:0");assert(!device.on);
+    }
     puts("PASS: 50 shared registers, planning tolerance persistence/validation, Serial/Cyphal isolation, Servo apply and boot commands");
 }
 '''
@@ -815,7 +822,15 @@ void reboot_to_bootloader(){++boots;}
 #include "state_manager/state_manager.cpp"
 #include "communications/serial/setup.hpp"
 auto& manager = get_app_manager();
+void setup_cordic() {}
+void create_motor(VBDriveConfig&) {device.on=false;}
+void apply_calibration() {}
 '''
+    app = (ROOT / 'App/app.cpp').read_text()
+    begin = app.index('    setup_cordic();', app.index('void app()'))
+    startup = app[begin:app.index('    // Warm up', begin)]
+    source += ('\nvoid run_motor_startup(){auto& app_manager=get_app_manager();'
+               'auto& config_data=app_manager.get_config();\n' + startup + '}\n')
     source += utils + callback + '\nvoid drain_serial(){process_serial(); for(int i=0;i<16;++i) serial_service();}\n' + TEST
     (tmp / "test.cpp").write_text(source)
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-DSTM32G4",
