@@ -315,7 +315,7 @@ int main() {
         equivalent.update_servo_config(SetPointType::POSITION,{.kp=2,.kd=.5f});
         assert(equivalent.set_angle_point(.2f));
         const float servo_position_current=servo_current(equivalent);
-        assert(equivalent.set_foc_point({.angle=.2f, .velocity=0, .torque=0,
+        assert(equivalent.set_foc_point({.torque=0, .angle=.2f, .velocity=0,
                                          .angle_kp=2, .velocity_kp=.5f}));
         near(servo_position_current,mit_current(equivalent));
         equivalent.update_servo_config(SetPointType::VELOCITY,{.kp=.5f,.ki=0});
@@ -633,7 +633,7 @@ int main() {
                                .deceleration_limit=2,.velocity_ramp_rate=2};
     for(int mode=0;mode<8;++mode) {
         assert(enabled.set_state(true)==HAL_OK && enabled._is_on && enabled.bridge_enabled);
-        if(mode==7)assert(enabled.set_foc_point({.angle=.1f,.torque=.05f,.angle_kp=2}));
+        if(mode==7)assert(enabled.set_foc_point({.torque=.05f,.angle=.1f,.angle_kp=2}));
         else assert(enabled.set_servo_command(mode,.1f,true,10));
         enabled.q_reg.set_integral_error(.7f);enabled.d_reg.set_integral_error(.6f);
         const auto kind=enabled.point_type;const auto setpoint=enabled.target;
