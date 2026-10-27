@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -16,7 +17,7 @@ bool eeprom_layout_safe(Storage& eeprom) {
                    config.app.sync_mode > 1)) return false;
     uint32_t calibration_id = 0;
     std::array<uint8_t, 8> sensor{};
-    if (eeprom.read(&calibration_id, CALIBRATION_PLACEMENT) != 0 ||
+    if (eeprom.read(&calibration_id, CALIBRATION_PLACEMENT + offsetof(CalibrationData, type_id)) != 0 ||
         eeprom.read(&sensor, IND_SENSOR_STATE_PLACEMENT) != 0) return false;
     uint32_t sensor_id = 0;
     std::memcpy(&sensor_id, sensor.data(), sizeof(sensor_id));
