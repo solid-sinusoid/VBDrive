@@ -18,6 +18,8 @@ VBDrive* get_motor();
 EEPROM& get_eeprom();
 uint64_t system_time();
 uint64_t micros_64();
+struct ImmediateTimerSnapshot { uint32_t tick; bool wrap_pending; };
+ImmediateTimerSnapshot immediate_timer_snapshot();
 uint32_t millis_32();
 void start_timers();
 void monitor_loop(uint32_t now);

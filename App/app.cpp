@@ -87,14 +87,18 @@ EEPROM& get_eeprom() {
     return eeprom;
 }
 static STSPIN32G4 motor_gate_driver(&hi2c3, GpioPin(DRV_WAKE_GPIO_Port, DRV_WAKE_Pin));
+static void sensor_spi_fault() {
+    if (htim1.Instance) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
+}
 
 // correct elec_offset will be set by apply_calibration
-AS5047P motor_encoder(GpioPin(SPI1_CS0_GPIO_Port, SPI1_CS0_Pin), &hspi1);
+AS5047P motor_encoder(GpioPin(SPI1_CS0_GPIO_Port, SPI1_CS0_Pin), &hspi1, false, 0, sensor_spi_fault);
 InductiveSensor inductive_sensor(
     eeprom,
     IND_SENSOR_STATE_PLACEMENT,
     &hspi3,
-    GpioPin(SPI3_CS_GPIO_Port, SPI3_CS_Pin)
+    GpioPin(SPI3_CS_GPIO_Port, SPI3_CS_Pin),
+    sensor_spi_fault
 );
 VBInverter motor_inverter(&hadc1, &hadc2);
 alignas(4) static CalibrationData calibration_data;  // avoid stack overflow and misalignment issues for I2C EEPROM
@@ -374,9 +378,20 @@ void reboot_to_bootloader() {
 // Otherwise HAL_Delay() will not work
 static volatile uint64_t millis_k __attribute__ ((__aligned__(8))) = 0;
 
+ImmediateTimerSnapshot immediate_timer_snapshot() {
+    const uint32_t before = TIM2->CNT;
+    const bool pending = (TIM2->SR & TIM_SR_UIF) != 0U;
+    const uint32_t after = TIM2->CNT;
+    return {after, pending || after < before};
+}
+
 extern "C" __attribute__((hot, optimize("O3"))) void main_callback() {
     auto& app_manager = get_app_manager();
     const auto sample = profile_main_begin();
+    const auto timer = immediate_timer_snapshot();
+    if (foc_cycle_sync.immediate_watchdog_expired(timer.tick, timer.wrap_pending)) {
+        app_manager.set_motor_enabled(false, MotorDisableReason::SyncWatchdog);
+    }
     // Service operations pause motor updates while thread mode changes hardware/config.
     if (app_manager.is_app_running() && !serial_deferred) {
         if (auto motor = get_motor()) {
@@ -410,7 +425,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
         // <'++'/'+='/... expression of 'volatile'-qualified type is deprecated> - C++20
         CRITICAL_SECTION({ millis_k = millis_k + 1; })
         profile_millisecond();
-    } else if (htim->Instance == TIM2) {
+    }
+}
+
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef* htim) {
+    if (htim->Instance == TIM2 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {
+        auto next = TIM2->CCR1 + 10000U;
+        if (static_cast<int32_t>(next - TIM2->CNT) <= 0) next = TIM2->CNT + 10000U;
+        TIM2->CCR1 = next;
         HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
     }
 }
@@ -433,7 +455,14 @@ micros system_time() {
 
 void start_timers() {
     profile_start();
-    HAL_TIM_Base_Start_IT(&htim2);
+    __HAL_TIM_SET_AUTORELOAD(&htim2, UINT32_MAX);
+    TIM_OC_InitTypeDef led_compare{};
+    led_compare.OCMode = TIM_OCMODE_TIMING;
+    led_compare.Pulse = 10000U;
+    HAL_IMPORTANT(HAL_TIM_OC_ConfigChannel(&htim2, &led_compare, TIM_CHANNEL_1));
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE | TIM_FLAG_CC1);
+    HAL_IMPORTANT(HAL_TIM_Base_Start_IT(&htim2));
+    HAL_IMPORTANT(HAL_TIM_OC_Start_IT(&htim2, TIM_CHANNEL_1));
     HAL_TIM_Base_Start_IT(&htim7);
 }
 

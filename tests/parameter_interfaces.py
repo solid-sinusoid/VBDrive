@@ -125,6 +125,13 @@ struct VBDrive {
     unsigned starts=0;int start_result=0;
     int stop() {on=false;reset_servo_input();point_type=SetPointType::VOLTAGE;target={};servo_value=0;return 0;}
     int start() {++starts;on=start_result==0;return start_result;}
+    uint32_t get_stop_generation() const {return 0;}
+    int start_guarded(uint32_t, void (*before_enable)()) {
+        if(on)return 0;
+        const int result=start();
+        if(result==0 && before_enable)before_enable();
+        return result;
+    }
     float get_angle() const {return 0;}
     float get_velocity() const {return 0;}
     float get_torque() const {return 0;}
@@ -886,6 +893,8 @@ bool _is_cyphal_on=false;
 void publish_foc_statuses(){}
 void publish_command_status(const CommandStatus&){}
 void reset_foc_cycle_session(){CRITICAL_SECTION({foc_cycle_sync.reset_session();})}
+struct {uint32_t CNT=0;} immediate_timer;
+auto* TIM2=&immediate_timer;
 #include "config/config.cpp"
 #include "state_manager/state_manager.cpp"
 #include "communications/serial/setup.hpp"

@@ -32,9 +32,39 @@ void FocCycleSync::reset_session()
     has_applying_cycle_.store(false, std::memory_order_release);
     has_last_sync_ = false;
     watchdog_reported_ = false;
+    immediate_watchdog_active_ = false;
+    immediate_cycle_valid_ = false;
+    immediate_wrap_seen_ = false;
+    immediate_elapsed_ = 0;
     session_phase_ = SessionPhase::Idle;
     main_status_head_ = 0;
     main_status_tail_ = 0;
+}
+
+void FocCycleSync::start_immediate_watchdog(const std::uint32_t timer_tick)
+{
+    reset_session();
+    if (mode_ == SyncMode::Immediate) {
+        immediate_tick_ = timer_tick;
+        immediate_started_tick_ = timer_tick;
+        immediate_watchdog_active_ = true;
+    }
+}
+
+bool FocCycleSync::immediate_watchdog_expired(const std::uint32_t timer_tick, const bool wrap_pending)
+{
+    if (!immediate_watchdog_active_) return false;
+    if (wrap_pending && !immediate_wrap_seen_) {
+        if (timer_tick >= immediate_tick_) immediate_elapsed_ = 500U;
+        immediate_wrap_seen_ = true;
+    } else if (!wrap_pending) {
+        immediate_wrap_seen_ = false;
+    }
+    if (immediate_elapsed_ >= 500U) return true;
+    const auto delta = static_cast<std::uint32_t>(timer_tick - immediate_tick_);
+    immediate_elapsed_ += std::min<std::uint32_t>(delta, 500U);
+    immediate_tick_ = timer_tick;
+    return immediate_elapsed_ >= 500U;
 }
 
 void FocCycleSync::set_mode(const SyncMode mode)
@@ -107,7 +137,10 @@ const FocCycleSync::Slot* FocCycleSync::find_slot(
 StageResult FocCycleSync::stage(
     const CycleCommand& command,
     const bool target_valid,
-    const std::uint64_t rx_us)
+    const std::uint64_t rx_us,
+    const std::uint32_t timer_tick,
+    const bool wrap_pending,
+    const std::uint32_t receipt_age_ticks)
 {
     command_received_count_.fetch_add(1U, std::memory_order_relaxed);
     // The host emits cycle zero while fail-closed releasing motor torque.
@@ -122,6 +155,15 @@ StageResult FocCycleSync::stage(
         return StageResult::Rejected;
     }
 
+    if (mode_ == SyncMode::Immediate && immediate_watchdog_active_ &&
+        (receipt_age_ticks >= 500U ||
+         receipt_age_ticks >= static_cast<std::uint32_t>(timer_tick - immediate_started_tick_) ||
+         immediate_watchdog_expired(timer_tick, wrap_pending) ||
+         (immediate_cycle_valid_ && !cycle_after(command.cycle_id, immediate_cycle_)))) {
+        push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::Stale, 0});
+        return StageResult::Rejected;
+    }
+
     if (has_last_applied_.load(std::memory_order_acquire)) {
         const auto last = last_applied_cycle_.load(std::memory_order_relaxed);
         if (!cycle_after(command.cycle_id, last)) {
@@ -132,6 +174,10 @@ StageResult FocCycleSync::stage(
 
     if ((find_slot(command.cycle_id, SlotState::Staged) != nullptr) ||
         (find_slot(command.cycle_id, SlotState::Armed) != nullptr)) {
+        if (mode_ == SyncMode::Immediate) {
+            push_main_status({command.cycle_id, StatusCode::Rejected, StatusReason::Stale, 0});
+            return StageResult::Rejected;
+        }
         command_staged_count_.fetch_add(1U, std::memory_order_relaxed);
         publish_staged_retry({command.cycle_id, StatusCode::Staged, StatusReason::None, 0});
         return StageResult::Staged;
@@ -185,6 +231,13 @@ StageResult FocCycleSync::stage(
             deferred_sync_.valid = false;
         }
         if (mode_ == SyncMode::Immediate) {
+            slot.phase = SyncPhase::Run;
+            if (immediate_watchdog_active_) {
+                immediate_tick_ = timer_tick;
+                immediate_elapsed_ = receipt_age_ticks;
+                immediate_cycle_ = command.cycle_id;
+                immediate_cycle_valid_ = true;
+            }
             slot.state.store(SlotState::Armed, std::memory_order_release);
             armed_slot_.store(index, std::memory_order_release);
         }

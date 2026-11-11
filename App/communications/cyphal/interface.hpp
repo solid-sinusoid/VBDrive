@@ -142,10 +142,18 @@ public:
             std::isfinite(msg.I_kp.value) && std::isfinite(msg.I_ki.value);
         StageResult result;
         CRITICAL_SECTION({
+            const auto timer = immediate_timer_snapshot();
+            const bool immediate_enabled = foc_cycle_sync.mode() != SyncMode::Immediate || (motor && motor->is_on());
+            uint32_t receipt_tick = 0;
+            const bool immediate = foc_cycle_sync.mode() == SyncMode::Immediate;
+            const bool receipt_valid = !immediate || get_interface()->received_after_tick(receipt_tick);
+            const uint32_t receipt_age = immediate ? timer.tick - receipt_tick : 0U;
             result = foc_cycle_sync.stage(CycleCommand{
                 .cycle_id = msg.cycle_id,
                 .target = {target.torque, target.angle, target.velocity, target.angle_kp, target.velocity_kp},
-                .current_kp = msg.I_kp.value, .current_ki = msg.I_ki.value}, valid, transfer->timestamp_usec);
+                .current_kp = msg.I_kp.value, .current_ki = msg.I_ki.value},
+                valid && immediate_enabled && receipt_valid && (!immediate || !timer.wrap_pending),
+                transfer->timestamp_usec, timer.tick, timer.wrap_pending, receipt_age);
         })
         const bool is_valid = result == StageResult::Staged;
         VBDRIVE_PROFILE_RESULT(mit, is_valid)

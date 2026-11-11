@@ -25,6 +25,8 @@ prefix = r'''
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <deque>
+#include <cstring>
 #include <libcanard/canard.h>
 #include <voltbro/foc/command_2_0.h>
 #include <voltbro/foc/sync_2_0.h>
@@ -40,6 +42,20 @@ constexpr unsigned DEFAULT_TIMEOUT_MICROS=1000000;
 constexpr CanardPortID FOC_COMMAND_STATUS_PORT=3810;
 uint64_t now_us=1000;
 uint64_t micros_64(){return now_us;}
+struct Timer;
+struct Counter {
+    unsigned value=0; bool wrap_on_read=false; Timer* timer=nullptr;
+    Counter& operator=(unsigned v) { value=v; return *this; }
+    operator unsigned();
+};
+struct Timer { Counter CNT{}; unsigned SR=0; } timer;
+Counter::operator unsigned() {
+    if (wrap_on_read) { wrap_on_read=false; value=0; timer->SR=1; }
+    return value;
+}
+Timer* TIM2=&timer;
+constexpr unsigned TIM_SR_UIF=1;
+struct ImmediateTimerSnapshot { uint32_t tick; bool wrap_pending; };
 using InterfacePtr=int;
 template<class T> struct AbstractSubscription {
     CanardRxSubscription sub{};
@@ -90,6 +106,9 @@ unsigned free_slots=3,aborted=0;
 unsigned HAL_FDCAN_GetTxFifoFreeLevel(Fdcan*){return free_slots;}
 int HAL_FDCAN_AbortTxRequest(Fdcan*,unsigned mask){aborted=mask;free_slots=3;return 0;}
 struct Sink {
+    bool receipt_known=true;
+    uint32_t receipt_tick=1000;
+    bool received_after_tick(uint32_t& tick){tick=receipt_tick;return receipt_known;}
     std::vector<voltbro_foc_command_status_1_0> statuses;
     void send_msg(voltbro_foc_command_status_1_0* msg,unsigned port,CanardTransferID*,uint64_t,CanardPriority priority){
         assert(port==3810 && priority==CanardPriorityImmediate);
@@ -107,8 +126,73 @@ helpers = '\n'.join(function(app, name) for name in (
     'void reset_foc_cycle_session(', 'void service_foc_watchdog('))
 status = function(interface, 'void publish_command_status(')
 status_drain = function(interface, 'void publish_foc_statuses(')
-program = prefix + status + status_drain + helpers + '\nvoid Manager::reset_foc_cycle_session(){::reset_foc_cycle_session();}\n' + handlers
+program = prefix + function(app, 'ImmediateTimerSnapshot immediate_timer_snapshot(') + status + status_drain + helpers + '\nvoid Manager::reset_foc_cycle_session(){::reset_foc_cycle_session();}\n' + handlers
 program += function(app, 'extern "C" __attribute__((hot, optimize("O3"))) void main_callback(')
+program += r'''
+#define STM32G4 1
+constexpr unsigned FDCAN_RX_FIFO0=0,FDCAN_RX_FIFO1=1;
+struct QueuedFrame {uint32_t id;std::vector<uint8_t> bytes;};
+std::deque<QueuedFrame> hardware_fifo;
+unsigned HAL_FDCAN_GetRxFifoFillLevel(void*,unsigned fifo){return fifo==0 ? hardware_fifo.size() : 0;}
+struct G4CAN {
+    void* handler=nullptr;
+    uint32_t rx_empty_tick[2]{},rx_received_after_tick=0;
+    bool rx_empty_known[2]{},rx_receipt_valid=false;
+    CanardInstance* rx=nullptr; FOCCommandSub* command=nullptr;
+    unsigned delay=0;
+    bool read_frame_from_fifo(CanardFrame* frame,uint8_t* bytes,unsigned) {
+        const auto item=hardware_fifo.front();hardware_fifo.pop_front();
+        std::memcpy(bytes,item.bytes.data(),item.bytes.size());
+        *frame={item.id,item.bytes.size(),bytes};return true;
+    }
+    void accept_rx_frame(const CanardFrame& frame) {
+        sink.receipt_known=rx_receipt_valid;sink.receipt_tick=rx_received_after_tick;
+        timer.CNT=unsigned(timer.CNT)+delay;
+        CanardRxTransfer transfer{};const auto accepted=canardRxAccept(rx,now_us++,&frame,0,&transfer,nullptr);
+        assert(accepted>=0);
+        if(accepted==1) {command->accept(&transfer);rx->memory_free(rx,transfer.payload);}
+    }
+    void process_canard_rx(bool all=true);
+};
+'''
+program += function((root/'Drivers/libcxxcanard/cyphal/providers/G4CAN.cpp').read_text(),'void G4CAN::process_canard_rx(')
+program += r'''
+void test_fifo_to_irq(FOCCommandSub& command) {
+  for(size_t mtu : {8,64}) {
+    foc_cycle_sync.set_mode(SyncMode::Immediate);device=Motor{};timer.SR=0;timer.CNT=900;
+    auto alloc=+[](CanardInstance*,size_t n){return std::malloc(n);};
+    auto release=+[](CanardInstance*,void* p){std::free(p);};
+    auto tx=canardInit(alloc,release),rx=canardInit(alloc,release);tx.node_id=42;rx.node_id=1;
+    auto queue=canardTxInit(32,mtu);CanardRxSubscription subscription{};
+    assert(canardRxSubscribe(&rx,CanardTransferKindMessage,2301,30,0,&subscription)>=0);
+    G4CAN g;g.rx=&rx;g.command=&command;g.process_canard_rx();
+    auto send=[&](uint16_t cycle) {
+      voltbro_foc_command_2_0 cmd{};cmd.cycle_id=cycle;cmd._torque.newton_meter=1;
+      uint8_t bytes[30];size_t size=30;assert(voltbro_foc_command_2_0_serialize_(&cmd,bytes,&size)==0);
+      CanardTransferMetadata meta{CanardPriorityImmediate,CanardTransferKindMessage,2301,CANARD_NODE_ID_UNSET,CanardTransferID(cycle&31)};
+      assert(canardTxPush(&queue,&tx,now_us+1000000,&meta,size,bytes)>0);
+      while(auto* item=canardTxPeek(&queue)) {
+        const auto* data=static_cast<const uint8_t*>(item->frame.payload);
+        hardware_fifo.push_back({item->frame.extended_can_id,{data,data+item->frame.payload_size}});
+        release(&tx,canardTxPop(&queue,item));
+      }
+      while(!hardware_fifo.empty()) g.process_canard_rx();
+      main_callback();
+    };
+    timer.CNT=1000;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.CNT=1100;send(1);assert(device.targets==0); // FIFO bound predates On.
+    g.process_canard_rx();timer.CNT=1200;send(2);
+    assert(device.targets==(mtu==64 ? 1 : 0)); // Fragments cannot refresh the deadline.
+    timer.CNT=1499;main_callback();assert(device.on);
+    timer.CNT=mtu==64 ? 1600 : 1500;main_callback();assert(!device.on);
+    g.process_canard_rx();timer.CNT=1700;send(3);assert(!device.on);
+    device.on=true;timer.CNT=2000;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.CNT=2001;g.process_canard_rx();g.delay=500;
+    const auto targets=device.targets;send(4);assert(!device.on && device.targets==targets);
+    canardRxUnsubscribe(&rx,CanardTransferKindMessage,2301);
+  }
+}
+'''
 program += r'''
 void stage(FOCCommandSub& sub,uint16_t cycle,uint8_t source=42){
     voltbro_foc_command_2_0 cmd{};cmd.cycle_id=cycle;
@@ -123,6 +207,7 @@ void marker(FOCSyncSub& sub,uint16_t cycle,uint8_t phase,uint8_t source=42){
     sub.handler(msg,&transfer);
 }
 int main(){
+    timer.CNT.timer=&timer;
     FOCCommandSub command(0,2301);FOCSyncSub sync(0,3809);
     // Commands are staged without changing the active target or PI; STAGED is immediate.
     regs.TXBRP=7;free_slots=0;stage(command,1);
@@ -233,6 +318,36 @@ int main(){
         canardRxUnsubscribe(&rx,CanardTransferKindMessage,2301);
         canardRxUnsubscribe(&rx,CanardTransferKindMessage,3809);
     }
+    // Immediate timeout is checked in the real IRQ adapter even if thread mode stalls.
+    foc_cycle_sync.set_mode(SyncMode::Immediate);device=Motor{};timer.CNT=UINT32_MAX-99U;
+    foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.CNT=399;main_callback();assert(device.on);
+    timer.CNT=400;main_callback();assert(!device.on);
+    const auto targets_after_timeout=device.targets;
+    stage(command,8);main_callback();assert(!device.on && device.targets==targets_after_timeout);
+    device.on=true;timer.CNT=1000;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.CNT=1001;sink.receipt_tick=1001;
+    stage(command,9);main_callback();assert(device.on && device.targets==targets_after_timeout+1);
+    timer.CNT=1500;main_callback();assert(device.on);
+    timer.CNT=1501;main_callback();assert(!device.on);
+    device.on=true;timer.CNT=1000;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.SR=TIM_SR_UIF;main_callback();assert(!device.on);
+    timer.SR=0;
+    device.on=true;timer.CNT=UINT32_MAX-1U;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    timer.CNT.wrap_on_read=true;main_callback();assert(device.on);
+    timer.CNT=1;main_callback();assert(device.on);
+    timer.SR=0;
+    device.on=true;timer.CNT=2000;foc_cycle_sync.start_immediate_watchdog(timer.CNT);
+    auto before_rx_targets=device.targets;
+    sink.receipt_known=false;stage(command,10);main_callback();
+    assert(device.targets==before_rx_targets);
+    sink.receipt_known=true;sink.receipt_tick=1499;
+    stage(command,11);main_callback();assert(device.targets==before_rx_targets);
+    sink.receipt_tick=2001;timer.CNT=2100;
+    stage(command,12);main_callback();assert(device.targets==before_rx_targets+1);
+    timer.CNT=2500;main_callback();assert(device.on);
+    timer.CNT=2501;main_callback();assert(!device.on);
+    test_fifo_to_irq(command);
     // Characterize the overlap: two meaningful old fields can occupy exactly
     // the bytes seen as a new 30-byte command after CAN FD padding/extent truncation.
     // A source/size check alone is not a safe version discriminator.

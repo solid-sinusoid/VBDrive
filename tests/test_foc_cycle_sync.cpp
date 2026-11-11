@@ -276,6 +276,72 @@ void test_immediate_mode_reports_negative_offset()
     assert(status.apply_offset_microsecond == -30);
 }
 
+void test_immediate_after_sync_prepare_applies_as_run()
+{
+    FocCycleSync sync{SyncMode::Synchronized};
+    assert(sync.stage(command(1), true, 100) == StageResult::Staged);
+    assert(sync.on_sync(1, SyncPhase::Prepare, 110) == SyncResult::Armed);
+    const auto prepare = sync.consume_armed(120);
+    assert(prepare && prepare->phase == SyncPhase::Prepare);
+    sync.complete_apply(*prepare, true);
+    sync.set_mode(SyncMode::Immediate);
+    assert(sync.stage(command(2), true, 200) == StageResult::Staged);
+    const auto immediate = sync.consume_armed(210);
+    assert(immediate && immediate->phase == SyncPhase::Run);
+}
+
+void test_immediate_duplicate_does_not_count_as_fresh()
+{
+    FocCycleSync sync{SyncMode::Immediate};
+    assert(sync.stage(command(12), true, 100) == StageResult::Staged);
+    assert(sync.stage(command(12), true, 110) == StageResult::Rejected);
+}
+
+void test_immediate_watchdog_requires_first_fresh_command_and_latches()
+{
+    FocCycleSync sync{SyncMode::Immediate};
+    sync.start_immediate_watchdog(UINT32_MAX - 99U);
+    assert(!sync.immediate_watchdog_expired(399));
+    assert(sync.immediate_watchdog_expired(400));
+    assert(sync.stage(command(1), true, 1000, 400) == StageResult::Rejected);
+
+    sync.start_immediate_watchdog(UINT32_MAX - 99U);
+    assert(sync.stage(command(65535), true, 1000, UINT32_MAX - 49U) == StageResult::Staged);
+    assert(sync.stage(command(65535), true, 1100, 50) == StageResult::Rejected);
+    assert(sync.stage(command(0), false, 1200, 51) == StageResult::Rejected);
+    assert(!sync.immediate_watchdog_expired(449));
+    assert(sync.immediate_watchdog_expired(450));
+    assert(sync.stage(command(0), true, 1300, 450) == StageResult::Rejected);
+
+    sync.start_immediate_watchdog(1000);
+    // Processing at 1200 must not add another 50 ms to a frame received at 1100.
+    assert(sync.stage(command(1), true, 0, 1200, false, 100) == StageResult::Staged);
+    assert(!sync.immediate_watchdog_expired(1599));
+    assert(sync.immediate_watchdog_expired(1600));
+    sync.start_immediate_watchdog(1000);
+    assert(sync.stage(command(2), true, 0, 1100, false, 500) == StageResult::Rejected);
+    // Still younger than 50 ms, but lower arrival bound precedes this On.
+    assert(sync.stage(command(3), true, 0, 1100, false, 101) == StageResult::Rejected);
+    assert(sync.stage(command(4), true, 0, 1100, false, 100) == StageResult::Rejected);
+}
+
+void test_immediate_watchdog_sees_more_than_old_one_second_period()
+{
+    FocCycleSync sync{SyncMode::Immediate};
+    sync.start_immediate_watchdog(1000);
+    assert(sync.immediate_watchdog_expired(11000));
+}
+
+void test_immediate_watchdog_accepts_normal_full_width_wrap()
+{
+    FocCycleSync sync{SyncMode::Immediate};
+    sync.start_immediate_watchdog(UINT32_MAX - 20U);
+    assert(!sync.immediate_watchdog_expired(9, true));
+    assert(!sync.immediate_watchdog_expired(10, true));
+    assert(!sync.immediate_watchdog_expired(11, false));
+    assert(sync.immediate_watchdog_expired(1000, false));
+}
+
 void test_invalid_target_is_rejected()
 {
     FocCycleSync sync{SyncMode::Synchronized};
@@ -508,6 +574,11 @@ int main()
     test_run_progress_survives_session_reset();
     test_watchdog_holds_twice_then_disables();
     test_immediate_mode_reports_negative_offset();
+    test_immediate_after_sync_prepare_applies_as_run();
+    test_immediate_duplicate_does_not_count_as_fresh();
+    test_immediate_watchdog_requires_first_fresh_command_and_latches();
+    test_immediate_watchdog_sees_more_than_old_one_second_period();
+    test_immediate_watchdog_accepts_normal_full_width_wrap();
     test_invalid_target_is_rejected();
     test_command_progress_keeps_last_received_cycle_after_rejection();
     test_direct_staged_status_progress_is_retained();

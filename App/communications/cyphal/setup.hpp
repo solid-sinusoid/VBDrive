@@ -92,6 +92,10 @@ void configure_fdcan(FDCAN_HandleTypeDef* hfdcan) {
     if (HAL_FDCAN_Init(hfdcan) != HAL_OK) {
         Error_Handler();
     }
+    if (HAL_FDCAN_ConfigTimestampCounter(hfdcan, FDCAN_TIMESTAMP_PRESC_16) != HAL_OK ||
+        HAL_FDCAN_EnableTimestampCounter(hfdcan, FDCAN_TIMESTAMP_INTERNAL) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 using DiagnosticRecord = uavcan_diagnostic_Record_1_1;

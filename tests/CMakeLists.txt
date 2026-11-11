@@ -36,7 +36,23 @@ target_compile_options(test_fdcan_tx_policy PRIVATE -Wall -Wextra -Wpedantic -We
 
 add_test(NAME fdcan_tx_policy COMMAND test_fdcan_tx_policy)
 
+foreach(name IN ITEMS bounded encoder)
+    add_executable(test_spi_${name} test_spi_${name}.cpp)
+    target_compile_features(test_spi_${name} PRIVATE cxx_std_20)
+    target_compile_definitions(test_spi_${name} PRIVATE STM32G4)
+    target_include_directories(test_spi_${name} PRIVATE spi-fake ../Drivers/libvoltbro)
+    target_compile_options(test_spi_${name} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endforeach()
+foreach(scenario IN ITEMS normal buffer only_fail buffer_fail busy tx rx fifo finish clock)
+    add_test(NAME spi_${scenario} COMMAND test_spi_bounded ${scenario})
+endforeach()
+add_test(NAME spi_encoder_fault COMMAND test_spi_encoder)
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME spi_start_gate COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/spi_start_gate.py)
+add_test(NAME spi_foc_propagation COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/spi_foc_propagation.py)
+add_test(NAME tim2_led COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tim2_led.py)
+add_test(NAME fdcan_timestamp_config COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fdcan_timestamp_config.py)
 add_test(NAME fdcan_rx_priority COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cyphal_rx.py)
 add_test(NAME fdcan_tx_provider COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cyphal_tx.py)
 add_test(NAME cyphal_telemetry COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cyphal_telemetry.py)

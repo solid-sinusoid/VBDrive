@@ -19,6 +19,7 @@ bool DriveStateController::is_logging() const { return is_app_running() && loggi
 ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled, MotorDisableReason reason) {
     auto motor = get_motor();
     if (!motor) return ParameterWriteResult::UNAVAILABLE;
+    const auto start_generation = motor->get_stop_generation();
     if (enabled && !is_app_running()) return ParameterWriteResult::INVALID;
     if (!enabled) {
         restore_motor_enable = false;
@@ -31,7 +32,11 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled, Motor
         if (!service_temperature()) return ParameterWriteResult::INVALID;
         if (motor->get_status() != VBDriveStatus::NOMINAL) return ParameterWriteResult::INVALID;
     }
-    return motor->set_state(enabled) == HAL_OK ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    const auto result = enabled
+        ? motor->start_guarded(start_generation, [] { foc_cycle_sync.start_immediate_watchdog(TIM2->CNT); })
+        : motor->stop();
+    if (result != HAL_OK) return ParameterWriteResult::INVALID;
+    return ParameterWriteResult::OK;
 }
 
 [[gnu::optimize("Os")]] bool DriveStateController::service_temperature() {
@@ -39,6 +44,7 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled, Motor
     if (!motor) return true;
     VBDRIVE_PROFILE_HANDLER(temperature_service_timing);
     const auto disable_count = motor_disable_diagnostics.count();
+    const auto start_generation = motor->get_stop_generation();
     const bool was_on = motor->is_on();
     motor->update_thermal_protection();
     CRITICAL_SECTION({
@@ -49,7 +55,7 @@ ParameterWriteResult DriveStateController::set_motor_enabled(bool enabled, Motor
         }
     })
     if (restore_motor_enable && is_app_running() && motor->get_status() == VBDriveStatus::NOMINAL) {
-        if (motor->start() != HAL_OK) {
+        if (motor->start_guarded(start_generation, [] { foc_cycle_sync.start_immediate_watchdog(TIM2->CNT); }) != HAL_OK) {
             if (motor->get_status() == VBDriveStatus::NOMINAL) restore_motor_enable = false;
             return false;
         }

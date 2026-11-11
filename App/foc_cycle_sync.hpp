@@ -68,7 +68,11 @@ public:
     void reset_session();
     void set_mode(SyncMode mode);
     SyncMode mode() const { return mode_; }
-    StageResult stage(const CycleCommand& command, bool target_valid, std::uint64_t rx_us);
+    StageResult stage(const CycleCommand& command, bool target_valid, std::uint64_t rx_us,
+                      std::uint32_t timer_tick = 0, bool wrap_pending = false,
+                      std::uint32_t receipt_age_ticks = 0);
+    void start_immediate_watchdog(std::uint32_t timer_tick);
+    bool immediate_watchdog_expired(std::uint32_t timer_tick, bool wrap_pending = false);
     SyncResult on_sync(std::uint16_t cycle_id, SyncPhase phase, std::uint64_t rx_us);
     std::optional<AppliedCycle> consume_armed(std::uint64_t apply_us);
     void complete_apply(const AppliedCycle& applied, bool accepted);
@@ -170,6 +174,13 @@ private:
     std::uint64_t last_sync_us_{};
     bool has_last_sync_{false};
     bool watchdog_reported_{false};
+    bool immediate_watchdog_active_{false};
+    bool immediate_cycle_valid_{false};
+    bool immediate_wrap_seen_{false};
+    std::uint16_t immediate_cycle_{};
+    std::uint32_t immediate_tick_{};
+    std::uint32_t immediate_started_tick_{};
+    std::uint32_t immediate_elapsed_{};
     SessionPhase session_phase_{SessionPhase::Idle};
     std::array<CommandStatus, status_capacity> main_statuses_{};
     std::uint8_t main_status_head_{};
